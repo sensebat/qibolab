@@ -58,6 +58,11 @@ _AVERAGING = {
     AveragingMode.SEQUENTIAL: lq.AveragingMode.SEQUENTIAL,
 }
 
+_ACQUISITION = {
+    AcquisitionType.INTEGRATION: lq.AcquisitionType.INTEGRATION,
+    AcquisitionType.DISCRIMINATION: lq.AcquisitionType.DISCRIMINATION,
+}
+
 _INSTRUMENT_CLASSES = {"HDAWG": HDAWG, "SHFSG": SHFSG, "SHFQA": SHFQA}
 
 
@@ -217,11 +222,16 @@ def calibration(
     channels: dict[ChannelId, Channel],
     instruments: dict[str, ZiInstrument],
     configs: dict[str, Config],
+    discriminate: bool = False,
 ) -> Calibration:
     """Build the LabOne Q calibration of the channels ``ids`` from their configs.
 
     Channels with the same LO name share the LO. An acquisition channel shares the
     oscillator of its probe channel, which is software-modulated.
+
+    With ``discriminate``, each acquisition channel gets the opposite of the
+    ``threshold`` of its config, to go with the negated kernel of
+    :func:`.pulse.kernel`.
     """
     los: dict[str, Oscillator] = {}
     oscillators: dict[ChannelId, Oscillator] = {}
@@ -259,6 +269,10 @@ def calibration(
                 port_delay=config.delay * pulse.NS,
                 range=config.power_range,
             )
+            if discriminate:
+                if config.threshold is None:
+                    raise ValueError(f"Channel '{id}' has no threshold.")
+                calib[id].threshold = -config.threshold
         else:
             calib[id] = SignalCalibration(
                 oscillator=oscillator(id),
@@ -377,16 +391,19 @@ class ZiController(Controller):
 
         Each sequence is followed by the relaxation time. Sweeps of the frequency of
         a hardware-modulated channel (drive) run in real time, inside the acquisition
-        loop; all the others run in near time, around it. Only
-        :attr:`AcquisitionType.INTEGRATION` is supported, with any averaging mode.
+        loop; all the others run in near time, around it.
+        :attr:`AcquisitionType.INTEGRATION` and :attr:`AcquisitionType.DISCRIMINATION`
+        are supported, with any averaging mode. Discrimination uses the
+        ``threshold`` and ``iq_angle`` of the acquisition configs.
         """
-        if options.acquisition_type is not AcquisitionType.INTEGRATION:
+        if options.acquisition_type not in _ACQUISITION:
             raise NotImplementedError(f"{options.acquisition_type} is not supported.")
         if options.fast_reset:
             raise NotImplementedError("Fast reset is not supported.")
 
         ids = signals(self.channels, sequences)
-        calib = calibration(ids, self.channels, self.instruments, configs)
+        discriminate = options.acquisition_type is AcquisitionType.DISCRIMINATION
+        calib = calibration(ids, self.channels, self.instruments, configs, discriminate)
         experiment = self._experiment(ids, calib)
         amplitudes: sweep.Amplitudes = {}
         near, real, axes = sweep.split(
@@ -399,7 +416,7 @@ class ZiController(Controller):
                 experiment.acquire_loop_rt(
                     count=options.nshots,
                     averaging_mode=_AVERAGING[options.averaging_mode],
-                    acquisition_type=lq.AcquisitionType.INTEGRATION,
+                    acquisition_type=_ACQUISITION[options.acquisition_type],
                 )
             )
             for group in real:
@@ -415,6 +432,7 @@ class ZiController(Controller):
                         configs,
                         self.sampling_rate,
                         amplitudes,
+                        options.acquisition_type,
                     )
                 with experiment.section():
                     for id in ids:
