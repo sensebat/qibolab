@@ -61,6 +61,7 @@ _AVERAGING = {
 _ACQUISITION = {
     AcquisitionType.INTEGRATION: lq.AcquisitionType.INTEGRATION,
     AcquisitionType.DISCRIMINATION: lq.AcquisitionType.DISCRIMINATION,
+    AcquisitionType.RAW: lq.AcquisitionType.RAW,
 }
 
 _INSTRUMENT_CLASSES = {"HDAWG": HDAWG, "SHFSG": SHFSG, "SHFQA": SHFQA}
@@ -392,12 +393,20 @@ class ZiController(Controller):
         Each sequence is followed by the relaxation time. Sweeps of the frequency of
         a hardware-modulated channel (drive) run in real time, inside the acquisition
         loop; all the others run in near time, around it.
-        :attr:`AcquisitionType.INTEGRATION` and :attr:`AcquisitionType.DISCRIMINATION`
-        are supported, with any averaging mode. Discrimination uses the
-        ``threshold`` and ``iq_angle`` of the acquisition configs.
+        All acquisition types and averaging modes are supported, except sequential
+        averaging of raw traces, which LabOne Q refuses. Discrimination uses
+        the ``threshold`` and ``iq_angle`` of the acquisition configs. Raw traces are
+        demodulated at the configured probe frequency, and only one acquisition per
+        call is taken: LabOne Q allows a single raw acquire in the averaging loop.
         """
-        if options.acquisition_type not in _ACQUISITION:
-            raise NotImplementedError(f"{options.acquisition_type} is not supported.")
+        acquisitions = [acq for sequence in sequences for acq in sequence.acquisitions]
+        raw = options.acquisition_type is AcquisitionType.RAW
+        if raw and len(acquisitions) > 1:
+            raise NotImplementedError(
+                f"RAW acquisition takes one acquisition per call, not "
+                f"{len(acquisitions)}: LabOne Q allows a single raw acquire in the "
+                "averaging loop."
+            )
         if options.fast_reset:
             raise NotImplementedError("Fast reset is not supported.")
 
@@ -439,10 +448,17 @@ class ZiController(Controller):
                         experiment.delay(id, time=options.relaxation_time * pulse.NS)
 
         data = self.session.run(self.session.compile(experiment))
-        return {
-            acquisition.id: results.parse(
-                data.get_data(str(acquisition.id)), options, axes
-            )
-            for sequence in sequences
-            for _, acquisition in sequence.acquisitions
-        }
+        parsed = {}
+        for id, acquisition in acquisitions:
+            result = results.parse(data.get_data(str(acquisition.id)), options, axes)
+            if raw:
+                probe = self.channels[id].iqout(id)
+                frequency = (
+                    configs[probe].frequency
+                    - configs[self.channels[probe].lo].frequency
+                )
+                result = results.demodulated(
+                    result, frequency * 1e-9, self.sampling_rate
+                )
+            parsed[acquisition.id] = result
+        return parsed

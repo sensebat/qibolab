@@ -9,6 +9,7 @@ import pytest
 
 pytest.importorskip("laboneq")
 
+from laboneq.core.exceptions import LabOneQException
 from laboneq.dsl.experiment import Acquire
 from laboneq.simple import Experiment
 
@@ -17,6 +18,7 @@ from qibolab._core.execution_parameters import (
     AveragingMode,
     ExecutionParameters,
 )
+from qibolab._core.instruments.zi import results
 from qibolab._core.sweeper import Parameter, Sweeper
 
 from ..test_calibration import channels, configs  # noqa: F401
@@ -26,6 +28,7 @@ from ..test_play import (  # noqa: F401
     drives,
     frequencies,
     options,
+    readouts,
 )
 
 
@@ -140,3 +143,75 @@ def test_default_options(connected, configs):  # noqa: F811
 
     (result,) = results.values()
     assert result.shape == (NSHOTS,)
+
+
+def raw(averaging_mode) -> ExecutionParameters:
+    return options(averaging_mode).model_copy(
+        update={"acquisition_type": AcquisitionType.RAW}
+    )
+
+
+@pytest.mark.parametrize(
+    "averaging_mode", [AveragingMode.CYCLIC, AveragingMode.SINGLESHOT]
+)
+def test_raw(connected, configs, averaging_mode):  # noqa: F811
+    """Raw results have the samples before the i/q axis."""
+    sequence = readouts([0])
+    amplitude = Sweeper(
+        parameter=Parameter.amplitude,
+        range=(0.1, 0.4, 0.1),
+        pulses=[ro for _, ro in sequence.acquisitions],
+    )
+    opts = raw(averaging_mode)
+
+    results = connected.play(configs, [sequence], opts, [[amplitude]])
+
+    (result,) = results.values()
+    # 1000 ns at 2 GSa/s
+    assert result.shape == opts.results_shape([[amplitude]], samples=2000)
+
+
+def test_raw_sequential(connected, configs):  # noqa: F811
+    """LabOne Q refuses sequential averaging of raw traces."""
+    with pytest.raises(LabOneQException, match="Sequential"):
+        connected.play(configs, [readouts([0])], raw(AveragingMode.SEQUENTIAL), [])
+
+
+def test_raw_single_acquisition(connected, configs):  # noqa: F811
+    with pytest.raises(NotImplementedError, match="RAW"):
+        connected.play(configs, [readouts([0, 1])], raw(AveragingMode.CYCLIC), [])
+    with pytest.raises(NotImplementedError, match="RAW"):
+        connected.play(
+            configs, [readouts([0]), readouts([0])], raw(AveragingMode.CYCLIC), []
+        )
+
+
+def test_raw_demodulated_at_probe_frequency(connected, configs, monkeypatch):  # noqa: F811
+    """Raw traces are demodulated at the probe frequency relative to its LO."""
+    frequencies = []
+    demodulated = results.demodulated
+
+    def record(data, frequency, sampling_rate):
+        frequencies.append((frequency, sampling_rate))
+        return demodulated(data, frequency, sampling_rate)
+
+    monkeypatch.setattr(results, "demodulated", record)
+    connected.play(configs, [readouts([2])], raw(AveragingMode.CYCLIC), [])
+
+    lo = configs[connected.channels["q2/probe"].lo].frequency
+    intermediate = (configs["q2/probe"].frequency - lo) * 1e-9
+    assert frequencies == [(pytest.approx(intermediate), 2.0)]
+
+
+def test_demodulated():
+    """A trace at the intermediate frequency, with an offset, becomes constant."""
+    frequency, rate, samples = 0.2, 2.0, 1000
+    n = np.arange(samples)
+    trace = 0.3 + (1 + 0.5j) * np.exp(2j * np.pi * frequency / rate * n)
+    data = np.stack([trace.real, trace.imag], axis=-1)[np.newaxis]
+
+    baseband = results.demodulated(data, frequency, rate)
+
+    assert baseband.shape == (1, samples, 2)
+    np.testing.assert_allclose(baseband[..., 0], np.sqrt(2) * 1.0, atol=1e-9)
+    np.testing.assert_allclose(baseband[..., 1], np.sqrt(2) * 0.5, atol=1e-9)

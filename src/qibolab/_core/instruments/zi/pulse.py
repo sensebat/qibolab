@@ -68,7 +68,8 @@ def play(
     channel also delays its probe channel, to keep them aligned. Swept amplitudes are
     taken from ``amplitudes``, by the id of the pulse or of its readout.
 
-    The kernel follows ``acquisition_type``: see :func:`kernel`.
+    The kernel follows ``acquisition_type``: see :func:`kernel`. Raw acquisitions
+    have no kernel, only the length of the acquisition.
     """
     discriminate = acquisition_type is AcquisitionType.DISCRIMINATION
     for id, op in sequence.align_to_delays():
@@ -91,6 +92,11 @@ def play(
                 amplitude=amplitudes.get(op.id, op.probe.amplitude),
                 phase=op.probe.relative_phase,
             )
+            if acquisition_type is AcquisitionType.RAW:
+                experiment.acquire(
+                    id, handle=str(op.id), length=op.acquisition.duration * NS
+                )
+                continue
             iq_angle = (configs[id].iq_angle or 0.0) if discriminate else None
             experiment.acquire(
                 id,

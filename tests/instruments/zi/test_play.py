@@ -170,9 +170,6 @@ def test_unsupported(connected, configs):  # noqa: F811
     parallel = frequencies(configs, ["q0/drive", "q0/probe"])
     with pytest.raises(NotImplementedError, match="real time"):
         connected.play(configs, [sequence], opts, [parallel])
-    for update in (
-        {"fast_reset": True},
-        {"acquisition_type": AcquisitionType.RAW},
-    ):
+    for update in ({"fast_reset": True},):
         with pytest.raises(NotImplementedError):
             connected.play(configs, [sequence], opts.model_copy(update=update), [])
