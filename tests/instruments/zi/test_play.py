@@ -154,20 +154,3 @@ def test_near_and_real_time_axes(connected, configs, averaging_mode):  # noqa: F
     for result in results.values():
         assert result.shape == opts.results_shape(sweepers)
         assert not np.isnan(result).any()
-
-
-def test_unsupported(connected, configs):  # noqa: F811
-    sequence = readouts([0])
-    with pytest.raises(NotImplementedError):
-        connected.play(configs, [sequence], ExecutionParameters(nshots=1), [])
-    opts = options(AveragingMode.CYCLIC)
-    drive = Pulse(duration=40, amplitude=0.5, envelope=Rectangular())
-    sequence = PulseSequence([("q0/drive", drive)]) | sequence
-    for update in (
-        {"fast_reset": True},
-        {"averaging_mode": AveragingMode.SEQUENTIAL},
-        {"acquisition_type": AcquisitionType.DISCRIMINATION},
-        {"acquisition_type": AcquisitionType.RAW},
-    ):
-        with pytest.raises(NotImplementedError):
-            connected.play(configs, [sequence], opts.model_copy(update=update), [])

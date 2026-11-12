@@ -101,7 +101,7 @@ def test_unsupported_instrument():
     with pytest.raises(ValidationError):
         ZiController(
             address="127.0.0.1:8004",
-            instruments={"qc": {"kind": "SHFQC", "serial": "DEV12201"}},
+            instruments={"qa": {"kind": "UHFQA", "serial": "DEV2001"}},
         )
 
 

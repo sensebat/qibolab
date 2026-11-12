@@ -14,6 +14,7 @@ from qibolab._core.components import (
     DcChannel,
     IqChannel,
 )
+from qibolab._core.execution_parameters import AcquisitionType
 from qibolab._core.identifier import ChannelId
 from qibolab._core.pulses import (
     Acquisition,
@@ -475,12 +476,37 @@ def _op(
 
 
 @cache
-def _kernel(weights: tuple[complex, ...]):
-    """LabOne Q kernel from its samples; equal samples give the same object.
+def kernel(
+    duration: float,
+    sampling_rate: float,
+    weights: tuple[complex, ...] | None = None,
+    iq_angle: float | None = None,
+):
+    """LabOne Q kernel of an acquisition; equal kernels give the same object.
 
-    LabOne Q conjugates a kernel to get the integration weights.
+    The integration weights ``w`` are the ``weights`` of the acquisition config (the
+    kernel as qibocal computes it), or unit weights. To discriminate, pass the
+    ``iq_angle`` of the config: the weights become ``-exp(1j * iq_angle) * w``, and
+    :func:`.controller.calibration` sets the threshold to ``-threshold``. Qibolab
+    (as qm and qibocal) assigns state 1 when ``Re(sum(w * s) * exp(1j * iq_angle))
+    > threshold``; LabOne Q assigns state 0 when the integrated result is above its
+    threshold (2-state assignment vector of its multistate setup).
+
+    LabOne Q uploads the conjugate of a kernel as the weights
+    (``controller/devices/qachannel.py``), so the kernel is ``conj(w)``. That the
+    SHFQA integrates ``sum(w * s)`` (``zhinst.utils.shfqa.multistate``,
+    ``weighted_integration``) is not checked on hardware.
+
+    Different kernels on one acquisition signal would set up more than 2 states, so
+    equal ones must be the same object.
     """
-    return pulse_library.sampled_pulse(np.array(weights))
+    if weights is None and iq_angle is None:
+        return waveform(Rectangular(), duration, sampling_rate)
+    n = round(duration * sampling_rate)
+    w = np.ones(n, dtype=complex) if weights is None else np.array(weights)
+    if iq_angle is not None:
+        w = -np.exp(1j * iq_angle) * w
+    return pulse_library.sampled_pulse(np.conj(w))
 
 
 Slots = dict[ChannelId, list[tuple]]
@@ -522,13 +548,14 @@ def _measure(
     sampling_rate: float,
     swept: Swept,
     slots: Slots,
+    acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION,
 ) -> None:
     """Add the probe pulse and the acquisition of a measure to the current section.
 
     The acquisition integrates with unit weights, or with the kernel of the
-    acquisition config, which must have one weight per sample. The kernel multiplies
-    the samples as it is, as qibocal computes it (the conjugate of the difference of
-    the two states): LabOne Q conjugates kernels, so it gets the conjugate.
+    acquisition config, which must have one weight per sample; to discriminate, the
+    weights are rotated by the ``iq_angle`` of the config (see :func:`kernel`). A raw
+    acquisition has no kernel, only the length of the acquisition.
 
     The signals come from :func:`_slot`; the other signals of the line are reserved,
     so that the measures of one channel keep their order.
@@ -536,16 +563,16 @@ def _measure(
     id = measure.acquisition
     probe = channels[id].iqout(id)
     assert probe is not None
-    weights = configs[id].kernel
-    if weights is None:
-        kernel = waveform(Rectangular(), measure.duration, sampling_rate)
-    elif len(weights) != round(measure.duration * sampling_rate):
+    config = configs[id]
+    weights = config.kernel
+    if weights is not None and len(weights) != round(measure.duration * sampling_rate):
         raise ValueError(
             f"The kernel of '{id}' has {len(weights)} samples, but the acquisition "
             f"lasts {round(measure.duration * sampling_rate)} samples."
         )
-    else:
-        kernel = _kernel(tuple(np.conj(weights)))
+    discriminate = acquisition_type is AcquisitionType.DISCRIMINATION
+    weights_key = None if weights is None else tuple(np.asarray(weights).tolist())
+    iq_angle = (config.iq_angle or 0.0) if discriminate else None
     pulse = measure.probe
     ids = {measure.sweep, pulse.id}
     if {p for i, p in swept if i in ids} - {Parameter.amplitude}:
@@ -578,7 +605,16 @@ def _measure(
         amplitude=amplitude,
         phase=pulse.relative_phase,
     )
-    experiment.acquire(signal, handle=str(measure.handle), kernel=kernel)
+    if acquisition_type is AcquisitionType.RAW:
+        experiment.acquire(
+            signal, handle=str(measure.handle), length=measure.duration * NS
+        )
+    else:
+        experiment.acquire(
+            signal,
+            handle=str(measure.handle),
+            kernel=kernel(measure.duration, sampling_rate, weights_key, iq_angle),
+        )
     for name, duration in [(probe_signal, pulse.duration), (signal, measure.window)]:
         experiment.delay(name, time=(measure.length - measure.wait - duration) * NS)
 
@@ -591,6 +627,7 @@ def play(
     sampling_rate: float,
     swept: Swept,
     slots: Slots,
+    acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION,
 ) -> None:
     """Add the blocks of a sequence to the current section, one subsection each.
 
@@ -601,7 +638,8 @@ def play(
     operation; the amplitude of a probe by the id of its readout or of the probe
     pulse. Other sweeps of a probe are refused: an SHFQA generator holds one
     waveform per signal. ``slots``
-    is shared by the sequences of one experiment, see :func:`_slot`.
+    is shared by the sequences of one experiment, see :func:`_slot`. The kernel
+    follows ``acquisition_type``, see :func:`_measure`.
     """
     for _, _, block in blocks:
         if isinstance(block, Measure):
@@ -616,9 +654,22 @@ def play(
                     sampling_rate,
                     swept,
                     slots,
+                    acquisition_type,
                 )
         else:
             with experiment.section():
                 id, ops = block
-                for op in ops:
-                    _op(experiment, id, op, channels[id], sampling_rate, swept)
+                run(experiment, id, ops, channels, sampling_rate, swept)
+
+
+def run(
+    experiment: Experiment,
+    id: ChannelId,
+    ops: list[PulseLike],
+    channels: dict[ChannelId, Channel],
+    sampling_rate: float,
+    swept: Swept,
+) -> None:
+    """Add the operations ``ops`` of channel ``id`` to the current section."""
+    for op in ops:
+        _op(experiment, id, op, channels[id], sampling_rate, swept)
