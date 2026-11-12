@@ -341,3 +341,21 @@ def test_frequency_not_iq(channels, configs, id):  # noqa: F811
     )
     with pytest.raises(TypeError, match=id):
         split([[frequency]], channels, configs, calib, {})
+
+
+@pytest.mark.parametrize("parameter", [Parameter.duration, Parameter.relative_phase])
+@pytest.mark.parametrize("probe", [False, True])
+def test_probe_other_sweeps(channels, configs, parameter, probe):  # noqa: F811
+    """Probe duration and phase sweeps are refused, not ignored.
+
+    A real-time length sweep on a probe is refused by LabOne Q: an SHFQA generator
+    holds one waveform.
+    """
+    sequence = readouts([0])
+    readout = sequence[0][1]
+    pulse = readout.probe if probe else readout
+    swept = {}
+    sweeper = Sweeper(parameter=parameter, values=np.array([1.0, 2.0]), pulses=[pulse])
+    split([[sweeper]], channels, configs, Calibration(), swept)
+    with pytest.raises(NotImplementedError, match="q0/acquisition"):
+        operations(sequence, channels, configs, swept)

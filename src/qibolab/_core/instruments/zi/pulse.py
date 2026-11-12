@@ -67,7 +67,10 @@ def play(
     with unit weights (custom kernels are not supported). A delay on an acquisition
     channel also delays its probe channel, to keep them aligned. Swept values are
     taken from ``swept``; the amplitude of a probe by the id of the readout or of its
-    probe pulse.
+    probe pulse. Other sweeps of a probe are refused: an SHFQA generator holds one
+    waveform. Other than probes, pulses are played with :data:`ENVELOPE`, whose length
+    can be swept; on a DC channel LabOne Q plays the real part of the envelope. A
+    :class:`VirtualZ` adds its phase to the oscillator of an IQ channel.
     """
     for id, op in sequence.align_to_delays():
         channel = channels[id]
@@ -94,6 +97,11 @@ def play(
                 ),
             )
         elif isinstance(op, Readout) and configs[id].kernel is None:
+            other = {p for i, p in swept if i in (op.id, op.probe.id)}
+            if other - {Parameter.amplitude}:
+                raise NotImplementedError(
+                    f"Sweeping the probe of '{id}' is supported only in amplitude."
+                )
             experiment.play(
                 probe,
                 pulse=waveform(op.probe.envelope, op.probe.duration, sampling_rate),
