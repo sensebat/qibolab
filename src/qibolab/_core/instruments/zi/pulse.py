@@ -343,6 +343,15 @@ def _op(
         )
 
 
+@cache
+def _kernel(weights: tuple[complex, ...]):
+    """LabOne Q kernel from its samples; equal samples give the same object.
+
+    LabOne Q conjugates a kernel to get the integration weights.
+    """
+    return pulse_library.sampled_pulse(np.array(weights))
+
+
 def _measure(
     experiment: Experiment,
     measure: Measure,
@@ -351,12 +360,26 @@ def _measure(
     sampling_rate: float,
     amplitudes: Amplitudes,
 ) -> None:
-    """Add the probe pulse and the acquisition of a measure to the current section."""
+    """Add the probe pulse and the acquisition of a measure to the current section.
+
+    The acquisition integrates with unit weights, or with the kernel of the
+    acquisition config, which must have one weight per sample. The kernel multiplies
+    the samples as it is, as qibocal computes it (the conjugate of the difference of
+    the two states): LabOne Q conjugates kernels, so it gets the conjugate.
+    """
     id = measure.acquisition
     probe = channels[id].iqout(id)
     assert probe is not None
-    if configs[id].kernel is not None:
-        raise NotImplementedError(f"Integration kernel on '{id}' is not supported.")
+    weights = configs[id].kernel
+    if weights is None:
+        kernel = waveform(Rectangular(), measure.duration, sampling_rate)
+    elif len(weights) != round(measure.duration * sampling_rate):
+        raise ValueError(
+            f"The kernel of '{id}' has {len(weights)} samples, but the acquisition "
+            f"lasts {round(measure.duration * sampling_rate)} samples."
+        )
+    else:
+        kernel = _kernel(tuple(np.conj(weights)))
     if measure.wait > 0:
         experiment.delay(probe, time=measure.wait * NS)
         experiment.delay(id, time=measure.wait * NS)
@@ -374,7 +397,7 @@ def _measure(
     experiment.acquire(
         id,
         handle=str(measure.handle),
-        kernel=waveform(Rectangular(), measure.duration, sampling_rate),
+        kernel=kernel,
     )
     for signal, duration in [(probe, measure.probe.duration), (id, measure.duration)]:
         experiment.delay(signal, time=(measure.length - measure.wait - duration) * NS)
@@ -393,7 +416,7 @@ def play(
     See :func:`layout`. Pulses play on IQ channels and, with real samples, on DC
     channels (flux and coupler lines). A :class:`VirtualZ` increments the phase of
     the channel's oscillator by its phase. A measure plays its probe pulse and
-    acquires at the same time, integrating with unit weights. Swept amplitudes are
+    acquires at the same time. Swept amplitudes are
     taken from ``amplitudes``, by the id of the pulse or of its readout.
     """
     for _, _, block in blocks:

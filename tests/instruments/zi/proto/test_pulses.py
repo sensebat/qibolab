@@ -445,3 +445,33 @@ def test_separate_at_different_times(connected, configs):  # noqa: F811
     ops[0] = ("q0/probe", Delay(duration=48))
     with pytest.raises(ValueError, match="no probe pulse"):
         connected.play(configs, [PulseSequence(ops)], OPTIONS, [])
+
+
+def kernel_weights(compiled) -> np.ndarray:
+    """Integration weights of the only acquisition, as compiled."""
+    waves = compiled[-1].scheduled_experiment.artifacts.waves
+    (weights,) = [w.samples for name, w in waves.items() if name.startswith("kernel")]
+    return np.asarray(weights)
+
+
+def test_kernel(connected, compiled, configs):  # noqa: F811
+    """The weights are the unit ones (oscillator only) times the kernel (F41).
+
+    The kernel is used as given, as qibocal computes it: LabOne Q conjugates
+    kernels, so the driver passes the conjugate.
+    """
+    sequence = PulseSequence([readout()])
+    run(connected, configs, [sequence])
+    unit = kernel_weights(compiled)
+    kernel = np.linspace(0, 1, 2000) * np.exp(1j * 0.3)
+    config = configs["q0/acquisition"]
+    configs["q0/acquisition"] = config.model_copy(update={"kernel": kernel})
+    run(connected, configs, [sequence, PulseSequence([readout()])])
+    assert kernel_weights(compiled) == pytest.approx(kernel * unit, abs=1e-9)
+
+
+def test_kernel_length(connected, configs):  # noqa: F811
+    config = configs["q0/acquisition"]
+    configs["q0/acquisition"] = config.model_copy(update={"kernel": np.ones(1000)})
+    with pytest.raises(ValueError, match="1000 samples"):
+        run(connected, configs, [PulseSequence([readout()])])
