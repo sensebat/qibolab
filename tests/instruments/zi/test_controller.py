@@ -144,7 +144,7 @@ def test_disconnect_zeroes_dc_offsets(controller, monkeypatch):
     assert len(compiled) == 1
     (hdawg,) = [
         init
-        for init in compiled[0].scheduled_experiment.recipe.initializations
+        for init in compiled[0].scheduled_experiment.artifacts.initializations
         if init.device_uid == "hdawg"
     ]
     assert {o.channel: o.offset for o in hdawg.outputs} == dict.fromkeys(

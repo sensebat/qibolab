@@ -156,7 +156,7 @@ def test_compile(controller, channels, configs):
 
     (hdawg,) = [
         init
-        for init in compiled.scheduled_experiment.recipe.initializations
+        for init in compiled.scheduled_experiment.artifacts.initializations
         if init.device_uid == "hdawg"
     ]
     assert {o.channel: o.offset for o in hdawg.outputs} == pytest.approx(
