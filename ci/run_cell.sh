@@ -4,6 +4,7 @@
 #   rows     r1  ElStabilini/qibolab@zi_drivers
 #            r2  sensebat/qibolab@orkun/26.10 + ElStabilini/qibolab@zi_drivers merged (for
 #                this run only, nothing is pushed)
+#            x   extra row: any other commit (orkun/proto-* branches, dispatch input), no merge
 #   columns  c1  laboneq pinned: the version in the uv.lock of ElStabilini/qibolab@zi_drivers
 #            c2  laboneq latest: the newest laboneq on PyPI
 #
@@ -14,14 +15,15 @@
 # pytest exit code, or 1 when a step before the tests failed.
 #
 # Usage: ci/run_cell.sh DRIVER_DIR SUITE_DIR OUT_DIR
-# Env:   ROW (r1|r2), COL (c1|c2)
+# Env:   ROW (r1|r2|x), COL (c1|c2)
 #        R1_REPO, R1_REF, R1_SHA   ElStabilini/qibolab, zi_drivers, its commit
 #        R2_REPO, R2_REF           sensebat/qibolab, orkun/26.10 (labels; r2 only)
+#        EXTRA_REPO, EXTRA_REF     labels of the extra row (x only)
 #        SUITE_REF                 orkun/ci (label)
 #        LABONEQ_PINNED, LABONEQ_LATEST   optional; read from R1's uv.lock / PyPI when empty
 #        R1_FETCH_URL              optional; where to fetch R1_SHA from (default GitHub)
 set -uo pipefail
-: "${ROW:?r1 or r2}" "${COL:?c1 or c2}"
+: "${ROW:?r1, r2 or x}" "${COL:?c1 or c2}"
 
 driver=$(cd "$1" && pwd)
 suite=$(cd "$2" && pwd)
@@ -42,8 +44,8 @@ e = os.environ
 row, col = e["ROW"], e["COL"]
 meta = {
     "cell": f"{row}-{col}", "row": row, "col": col,
-    "repo": e.get("R1_REPO" if row == "r1" else "R2_REPO", ""),
-    "ref": e.get("R1_REF" if row == "r1" else "R2_REF", ""),
+    "repo": e.get({"r1": "R1_REPO", "r2": "R2_REPO"}.get(row, "EXTRA_REPO"), ""),
+    "ref": e.get({"r1": "R1_REF", "r2": "R2_REF"}.get(row, "EXTRA_REF"), ""),
     "sha": e["SHA"],
     "merged_repo": e.get("R1_REPO", "") if row == "r2" else "",
     "merged_ref": e.get("R1_REF", "") if row == "r2" else "",
@@ -84,14 +86,17 @@ if [ "$ROW" = r2 ]; then
     git -C "$driver" merge --abort
     exit 1
   fi
-  r1_commit=$MERGED_SHA
+  r1_lock() { git -C "$driver" show "$MERGED_SHA:uv.lock"; }
+elif [ "$ROW" = r1 ]; then
+  r1_lock() { git -C "$driver" show "$SHA:uv.lock"; }
 else
-  r1_commit=$SHA
+  r1_lock() { curl -fsS "https://raw.githubusercontent.com/$R1_REPO/${R1_SHA:-$R1_REF}/uv.lock"; }
 fi
 
 STAGE="reading laboneq versions failed"
+# pinned = the laboneq version in R1's uv.lock, for every row.
 if [ -z "$LABONEQ_PINNED" ]; then
-  LABONEQ_PINNED=$(git -C "$driver" show "$r1_commit:uv.lock" | lock_laboneq) || exit 1
+  LABONEQ_PINNED=$(r1_lock | lock_laboneq) || exit 1
 fi
 if [ -z "$LABONEQ_LATEST" ]; then
   LABONEQ_LATEST=$(curl -fsS https://pypi.org/pypi/laboneq/json \
