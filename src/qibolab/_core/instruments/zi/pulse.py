@@ -6,9 +6,16 @@ from functools import cache
 import numpy as np
 from laboneq.simple import Experiment, SectionTimingMode, pulse_library
 
-from qibolab._core.components import Channel, Config, DcChannel, IqChannel
+from qibolab._core.components import (
+    AcquisitionChannel,
+    Channel,
+    Config,
+    DcChannel,
+    IqChannel,
+)
 from qibolab._core.identifier import ChannelId
 from qibolab._core.pulses import (
+    Acquisition,
     Delay,
     Envelope,
     Pulse,
@@ -146,28 +153,69 @@ def _grid(time: float, up: bool = True) -> float:
     return float(rounding(time / READOUT_GRID + (-1e-9 if up else 1e-9)) * READOUT_GRID)
 
 
-def _line(id: ChannelId, ops: list[PulseLike]) -> list[Block]:
-    """Blocks of an acquisition channel: the measures and the delays between them.
+Timeline = list[tuple[float, PulseLike]]
+"""Operations of one channel with their start time in ns."""
 
-    The section of a measure starts at the grid point before it and lasts until the
-    grid point after it; delays fill the gaps. LabOne Q needs the sections with
-    readouts on one QA line either to start together or not to overlap.
+
+def _timeline(ops: list[PulseLike]) -> Timeline:
+    """Start time of each operation of one channel."""
+    times = np.cumsum([0.0] + [op.duration for op in ops])
+    return [(float(time), op) for time, op in zip(times, ops)]
+
+
+def _measures(
+    id: ChannelId, ops: Timeline, probe: ChannelId, probe_ops: Timeline
+) -> list[tuple[float, Measure]]:
+    """Measures of an acquisition channel, with their start time.
+
+    A :class:`Readout` is one measure. An :class:`Acquisition` is one measure with
+    the :class:`Pulse` that starts at the same time on the probe channel. Other
+    than these, both channels may only hold delays.
     """
+    pulses = {round(t, 6): op for t, op in probe_ops if isinstance(op, Pulse)}
     measures: list[tuple[float, Measure]] = []
-    time = 0.0
-    for op in ops:
+    for time, op in ops:
         if isinstance(op, Readout):
             measure = Measure(id, op.probe, op.acquisition.duration, op.id, op.id)
             measures.append((time, measure))
+        elif isinstance(op, Acquisition):
+            pulse = pulses.pop(round(time, 6), None)
+            if pulse is None:
+                raise ValueError(
+                    f"Acquisition at {time} ns on '{id}' has no probe pulse starting "
+                    f"at the same time on '{probe}'."
+                )
+            measures.append((time, Measure(id, pulse, op.duration, op.id, pulse.id)))
         elif not isinstance(op, Delay):
             raise NotImplementedError(
                 f"{type(op).__name__} on channel '{id}' is not supported."
             )
-        time += op.duration
+    for time, pulse in pulses.items():
+        raise ValueError(
+            f"Pulse at {time} ns on '{probe}' has no acquisition starting at the "
+            f"same time on '{id}'."
+        )
+    for _, op in probe_ops:
+        if not isinstance(op, (Pulse, Delay)):
+            raise NotImplementedError(
+                f"{type(op).__name__} on channel '{probe}' is not supported."
+            )
+    return sorted(measures, key=lambda measure: measure[0])
 
+
+def _line(
+    id: ChannelId, ops: Timeline, probe: ChannelId, probe_ops: Timeline
+) -> list[Block]:
+    """Blocks of an acquisition channel and its probe channel.
+
+    They are the measures (see :func:`_measures`) and the delays between them. The
+    section of a measure starts at the grid point before it and lasts until the
+    grid point after it; delays fill the gaps. LabOne Q needs the sections with
+    readouts on one QA line either to start together or not to overlap.
+    """
     blocks: list[Block] = []
     start = 0.0
-    for begin, measure in measures:
+    for begin, measure in _measures(id, ops, probe, probe_ops):
         anchor = _grid(begin, up=False)
         if anchor < start:
             raise ValueError(
@@ -180,6 +228,7 @@ def _line(id: ChannelId, ops: list[PulseLike]) -> list[Block]:
         measure = replace(measure, wait=begin - anchor, length=end - anchor)
         blocks.append((anchor, end, measure))
         start = end
+    time = max(t + op.duration for t, op in ops + probe_ops)
     if time > start:
         blocks.append((start, time, (id, [Delay(duration=time - start)])))
     return blocks
@@ -231,20 +280,30 @@ def layout(
     the previous sections on its signals are over, playing them in this order keeps
     the qibolab timing of each channel. Durations must be whole samples.
 
-    The operations of a channel without readouts are one block. On an acquisition
-    channel each readout is one block, see :func:`_line`: readouts may start at
-    different times, and one qubit may be read out more than once.
+    The operations of a channel without readouts are one block. An acquisition
+    channel and its probe channel are split in measures and delays, see
+    :func:`_line`: readouts may start at different times, and one qubit may be
+    read out more than once, within the limits checked by :func:`check_lines`.
     """
     blocks: list[Block] = []
     sequence = sequence.align_to_delays()
     for id, op in sequence:
         samples(id, op, sampling_rate)
-    for id in sequence.channels:
-        ops = list(sequence.channel(id))
-        if any(isinstance(op, Readout) for op in ops):
-            blocks += _line(id, ops)
-        else:
-            blocks.append((0.0, sum(op.duration for op in ops), (id, ops)))
+    timelines = {id: _timeline(list(sequence.channel(id))) for id in sequence.channels}
+    lines = {
+        id: channel.probe
+        for id, channel in channels.items()
+        if isinstance(channel, AcquisitionChannel)
+        and channel.probe is not None
+        and (id in timelines or channel.probe in timelines)
+    }
+    for id, probe in lines.items():
+        blocks += _line(id, timelines.get(id, []), probe, timelines.get(probe, []))
+    for id, ops in timelines.items():
+        if id not in lines and id not in lines.values():
+            blocks.append(
+                (0.0, ops[-1][0] + ops[-1][1].duration, (id, [op for _, op in ops]))
+            )
     return sorted(blocks, key=lambda block: block[:2])
 
 

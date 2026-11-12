@@ -24,6 +24,7 @@ from qibolab._core.execution_parameters import (
 from qibolab._core.instruments.zi import ZiDcConfig
 from qibolab._core.instruments.zi.controller import precompensation
 from qibolab._core.pulses import (
+    Acquisition,
     Custom,
     Delay,
     Exponential,
@@ -396,3 +397,51 @@ def test_sequences_follow_relaxation(connected, compiled, configs):  # noqa: F81
     assert probe_segments(connected, compiled, 3.5e-6) == [(40, 1040), (2080, 3080)]
     time, out = wave(connected, compiled[-1], "q1/drive", 3.5e-6)
     assert segments(time, out) == [(2040, 2080)]
+
+
+def separate(qubit: int = 0, delay: float = 0, probe: Pulse = PROBE) -> list:
+    """Probe pulse and acquisition as separate operations, after ``delay``."""
+    return [
+        (f"q{qubit}/probe", Delay(duration=delay)),
+        (f"q{qubit}/probe", probe.new()),
+        (f"q{qubit}/acquisition", Delay(duration=delay)),
+        (f"q{qubit}/acquisition", Acquisition(duration=probe.duration)),
+    ]
+
+
+def test_separate_probe_and_acquisition(connected, compiled, configs):  # noqa: F811
+    """A probe Pulse and an Acquisition that start together are one readout (F25)."""
+    sequence = PulseSequence(separate(0, 140))
+    run(connected, configs, [sequence])
+    assert probe_segments(connected, compiled) == [(140, 1140)]
+
+
+def test_separate_and_readout_together(connected, configs):  # noqa: F811
+    sequence = PulseSequence(separate(0) + [readout(1)])
+    assert len(run(connected, configs, [sequence])) == 2
+
+
+def test_separate_probe_amplitude_sweep(connected, configs):  # noqa: F811
+    ops = separate(0)
+    sweeper = Sweeper(
+        parameter=Parameter.amplitude, values=np.array([0.1, 0.2]), pulses=[ops[1][1]]
+    )
+    run(connected, configs, [PulseSequence(ops)], [[sweeper]])
+
+
+@pytest.mark.parametrize(
+    ("drop", "match"), [(1, "no probe pulse"), (3, "no acquisition")]
+)
+def test_separate_unpaired(connected, configs, drop, match):  # noqa: F811
+    """An Acquisition without a probe pulse at the same time, or the reverse."""
+    ops = separate(0, 40)
+    del ops[drop]
+    with pytest.raises(ValueError, match=match):
+        connected.play(configs, [PulseSequence(ops)], OPTIONS, [])
+
+
+def test_separate_at_different_times(connected, configs):  # noqa: F811
+    ops = separate(0, 40)
+    ops[0] = ("q0/probe", Delay(duration=48))
+    with pytest.raises(ValueError, match="no probe pulse"):
+        connected.play(configs, [PulseSequence(ops)], OPTIONS, [])
