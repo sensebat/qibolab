@@ -92,6 +92,18 @@ Real time vs near time after this branch: frequency of a hardware-modulated chan
 | G4 / X04: two probe waveforms or amplitudes on one probe signal in one real-time loop | SHFQA limit. Refuse before compiling, naming the qubit and the two pulses. | refused by LabOne Q in both versions |
 | F45: fast reset | After each readout: `with match(handle=...)`, `case(state=0)` empty, `case(state=1)` plays the reset pulse on the qubit drive. Works with INTEGRATION and DISCRIMINATION (threshold set). The controller does not know the natives: add a `ZiController` field mapping each acquisition channel to `(drive channel, pulse)`; refuse fast reset for a channel without it. | OK (emulation; feedback latency not modelled) |
 
+### acquisition: done and not done
+
+Done on `orkun/proto-acquisition` (emulation only): F21 SEQUENTIAL, F17 DISCRIMINATION with X01, F18 RAW, F45 fast reset, G7 SHFQC.
+SHFQC was listed under `orkun/proto-pulses`; it is done here, so proto-pulses should drop it.
+
+Implemented, but the values depend on hardware facts not checked:
+- DISCRIMINATION: kernel `-exp(1j * iq_angle)` times unit weights, threshold `-threshold`. Reason: LabOne Q sets the 2-state assignment vector so that above the threshold is state 0 (`controller/devices/qachannel.py`, `_calc_theoretical_assignment_vec`), while qibolab (qm, qibocal) has state 1 when `Re((I + 1j Q) exp(1j iq_angle)) > threshold`. This assumes the integration is linear in the kernel (convention of `laboneq.analysis.calculate_integration_kernels`). Emulation returns placeholder states, so the state mapping and the sign of the angle need hardware data.
+- RAW: one acquisition per call (LabOne Q `AcquisitionType.RAW` docstring; the emulator accepts more). Traces are demodulated in software at the configured probe frequency relative to the LO, as qblox and qm; with a probe frequency sweep the configured value is used. The sign of the SHFQA scope samples is not checked. SEQUENTIAL with RAW and traces over 4096 samples are refused by LabOne Q.
+- Fast reset: needs DISCRIMINATION; reset pulses come from the new field `ZiController.reset_pulses` (acquisition channel to (channel, pulse)). Feedback latency is not modelled in emulation.
+
+Not done in this round (not requested): F41 kernels, readout layout (G3/X03, F47, F25), G4 refusal.
+
 ## Version notes
 
 - `pulse_library.sampled_pulse_complex` and `sampled_pulse_real` are gone in 26.10.1. Use `sampled_pulse` (both versions).
