@@ -6,7 +6,14 @@ from laboneq.simple import Experiment, pulse_library
 
 from qibolab._core.components import Channel, Config, IqChannel
 from qibolab._core.identifier import ChannelId
-from qibolab._core.pulses import Delay, Envelope, Pulse, Readout, Rectangular
+from qibolab._core.pulses import (
+    Delay,
+    Envelope,
+    Pulse,
+    PulseLike,
+    Readout,
+    Rectangular,
+)
 from qibolab._core.sequence import PulseSequence
 
 from .sweep import Amplitudes
@@ -17,6 +24,21 @@ NS = 1e-9
 """Qibolab times are in ns, LabOne Q ones in s."""
 
 
+def samples(id: ChannelId, op: PulseLike, sampling_rate: float) -> None:
+    """Check that the durations of ``op`` on channel ``id`` are whole samples.
+
+    LabOne Q would round them, moving the pulse with respect to the other channels.
+    """
+    parts = [op.probe, op.acquisition] if isinstance(op, Readout) else [op]
+    for part in parts:
+        n = part.duration * sampling_rate
+        if abs(n - round(n)) > 1e-6:
+            raise ValueError(
+                f"{type(part).__name__} of {part.duration} ns on channel '{id}' is not "
+                f"a whole number of samples at {sampling_rate} GSps."
+            )
+
+
 @cache
 def waveform(envelope: Envelope, duration: float, sampling_rate: float):
     """Unit-amplitude LabOne Q pulse with the samples of a qibolab envelope.
@@ -24,7 +46,7 @@ def waveform(envelope: Envelope, duration: float, sampling_rate: float):
     Equal envelopes give the same object, since an SHFQA output can only hold one
     waveform.
     """
-    samples = int(duration * sampling_rate)
+    samples = round(duration * sampling_rate)
     return pulse_library.sampled_pulse(envelope.i(samples) + 1j * envelope.q(samples))
 
 
@@ -41,9 +63,11 @@ def play(
     A :class:`Readout` plays its probe pulse and acquires at the same time, integrating
     with unit weights (custom kernels are not supported). A delay on an acquisition
     channel also delays its probe channel, to keep them aligned. Swept amplitudes are
-    taken from ``amplitudes``, by the id of the pulse or of its readout.
+    taken from ``amplitudes``, by the id of the pulse or of its readout. Durations
+    must be whole samples.
     """
     for id, op in sequence.align_to_delays():
+        samples(id, op, sampling_rate)
         channel = channels[id]
         probe = channel.iqout(id)
         if isinstance(op, Delay):
