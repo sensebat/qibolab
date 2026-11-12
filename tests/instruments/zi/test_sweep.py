@@ -32,10 +32,10 @@ def test_split(channels, configs):  # noqa: F811
         values=np.array([7.0e9]),
         channels=["q0/probe"],
     )
-    amplitudes = {}
+    swept = {}
 
     near, real, axes = split(
-        [[drive], [amplitude], [probe]], channels, configs, calib, amplitudes
+        [[drive], [amplitude], [probe]], channels, configs, calib, swept
     )
 
     # LabOne Q returns the near-time sweeps (1 and 2), the shots, then the drive (0)
@@ -45,7 +45,7 @@ def test_split(channels, configs):  # noqa: F811
     assert real[0][0].values == pytest.approx(drive.values - DRIVE_LO)
     assert near[1][0].values == pytest.approx(probe.values - PROBE_LO)
     assert near[0][0].values == pytest.approx(amplitude.values)
-    assert amplitudes[pulse.id] is near[0][0]
+    assert swept[pulse.id, Parameter.amplitude] is near[0][0]
     # the swept parameters are the oscillators of the calibration
     assert calib["q0/drive"].oscillator.frequency is real[0][0]
     assert calib["q0/probe"].oscillator.frequency is near[1][0]

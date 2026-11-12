@@ -9,8 +9,8 @@ from qibolab._core.sweeper import ParallelSweepers, Parameter
 
 __all__ = []
 
-Amplitudes = dict[PulseId, SweepParameter]
-"""Swept amplitude of each pulse, by pulse id."""
+Swept = dict[tuple[PulseId | ChannelId, Parameter], SweepParameter]
+"""Swept value of each pulse or channel, by its id and the swept parameter."""
 
 Axes = list[int | None]
 """Qibolab sweeper of each axis of the LabOne Q results, ``None`` for the shots."""
@@ -21,7 +21,7 @@ def _group(
     channels: dict[ChannelId, Channel],
     configs: dict[str, Config],
     calibration: Calibration,
-    amplitudes: Amplitudes,
+    swept: Swept,
 ) -> tuple[list[SweepParameter], bool]:
     """Sweep parameters of one group of parallel sweepers, and their execution type.
 
@@ -31,8 +31,8 @@ def _group(
       oscillator in ``calibration``. It runs in real time if the oscillator is
       modulated by the hardware (drive), in near time if by the software (probe),
       since an SHFQA generator cannot be swept in real time in integration mode;
-    - amplitude of pulses: the parameter is recorded in ``amplitudes``, to be used
-      when the pulse is played, and runs in near time.
+    - amplitude of pulses: the parameter is recorded in ``swept``, to be used when
+      the pulse is played, and runs in near time.
     """
     parameters = []
     real_time = set()
@@ -46,8 +46,9 @@ def _group(
                 real_time.add(oscillator.modulation_type is ModulationType.HARDWARE)
         elif sweeper.parameter is Parameter.amplitude:
             for pulse in sweeper.pulses:
-                amplitudes[pulse.id] = SweepParameter(values=sweeper.values)
-                parameters.append(amplitudes[pulse.id])
+                key = (pulse.id, sweeper.parameter)
+                swept[key] = SweepParameter(values=sweeper.values)
+                parameters.append(swept[key])
                 real_time.add(False)
         else:
             raise NotImplementedError(
@@ -65,7 +66,7 @@ def split(
     channels: dict[ChannelId, Channel],
     configs: dict[str, Config],
     calibration: Calibration,
-    amplitudes: Amplitudes,
+    swept: Swept,
 ) -> tuple[list[list[SweepParameter]], list[list[SweepParameter]], Axes]:
     """Split the sweepers in near-time and real-time groups, keeping their order.
 
@@ -81,9 +82,7 @@ def split(
     near_axes: Axes = []
     real_axes: Axes = []
     for index, group in enumerate(sweepers):
-        parameters, real_time = _group(
-            group, channels, configs, calibration, amplitudes
-        )
+        parameters, real_time = _group(group, channels, configs, calibration, swept)
         if real_time:
             real.append(parameters)
             real_axes.append(index)

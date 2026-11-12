@@ -39,7 +39,7 @@ from qibolab._core.sweeper import ParallelSweepers
 
 from . import pulse, results, sweep
 
-__all__ = ["ZiInstrument", "ZiController"]
+__all__ = ["ZiController", "ZiInstrument"]
 
 SAMPLING_RATE = 2.0
 """Sampling rate in GSps of SHFSG and SHFQA, and of an HDAWG set up with them."""
@@ -390,10 +390,8 @@ class ZiController(Controller):
         ids = signals(self.channels, sequences)
         calib = calibration(ids, self.channels, self.instruments, configs)
         experiment = self._experiment(ids, calib)
-        amplitudes: sweep.Amplitudes = {}
-        near, real, axes = sweep.split(
-            sweepers, self.channels, configs, calib, amplitudes
-        )
+        swept: sweep.Swept = {}
+        near, real, axes = sweep.split(sweepers, self.channels, configs, calib, swept)
         with ExitStack() as stack:
             for group in near:
                 stack.enter_context(experiment.sweep(parameter=group))
@@ -416,7 +414,7 @@ class ZiController(Controller):
                         self.channels,
                         configs,
                         self.sampling_rate,
-                        amplitudes,
+                        swept,
                     )
                 with experiment.section():
                     for id in ids:
