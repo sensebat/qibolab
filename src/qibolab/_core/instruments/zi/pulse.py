@@ -262,9 +262,23 @@ def _gap(
     """Delays of channel ``id`` between ``begin`` and ``end``, shortened by ``cut``.
 
     The delays keep their ids, so that swept durations apply. ``cut`` (ns) is taken
-    from the delays that are not swept, the last ones first.
+    from the delays that are not swept, the last ones first. A swept delay must
+    change by multiples of :data:`READOUT_GRID`: LabOne Q would otherwise move the
+    readout after it onto the grid, without an error.
     """
     delays = [op for t, op in ops if begin - 1e-6 <= t < end - 1e-6]
+    for op in delays:
+        parameter = swept.get((op.id, Parameter.duration))
+        if parameter is None:
+            continue
+        steps = (np.asarray(parameter.values) / NS - op.duration) / READOUT_GRID
+        if not np.allclose(steps, np.round(steps), atol=1e-6):
+            raise ValueError(
+                f"The swept delay before the readout at {end} ns on '{id}' takes "
+                f"values {np.asarray(parameter.values) / NS} ns: they must differ "
+                f"from {op.duration} ns by multiples of {READOUT_GRID} ns, the "
+                "readout grid."
+            )
     out: list[PulseLike] = []
     for op in reversed(delays):
         if cut > 1e-9 and (op.id, Parameter.duration) not in swept:

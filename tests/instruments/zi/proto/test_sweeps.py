@@ -151,6 +151,26 @@ def test_fractional_duration_refused(connected, configs):  # noqa: F811
         connected.play(configs, [sequence], options(AveragingMode.CYCLIC), [[duration]])
 
 
+def test_delay_duration_off_readout_grid_refused(connected, configs):  # noqa: F811
+    """A swept delay before a readout changes by multiples of 8 ns, or is refused.
+
+    Found in review: with 40, 44 and 60 ns LabOne Q moved the readout onto the 8 ns
+    readout grid (4 ns late) without an error (output simulator).
+    """
+    delay = Delay(duration=40)
+    sequence = PulseSequence(
+        [("q0/drive", Pulse(duration=40, amplitude=0.5, envelope=Rectangular()))]
+    )
+    sequence.append(("q0/acquisition", Delay(duration=40)))
+    sequence.append(("q0/acquisition", delay))
+    sequence |= readouts([0])
+    duration = Sweeper(
+        parameter=Parameter.duration, values=np.array([40, 44, 60]), pulses=[delay]
+    )
+    with pytest.raises(ValueError, match="readout grid"):
+        connected.play(configs, [sequence], options(AveragingMode.CYCLIC), [[duration]])
+
+
 PHASES = np.linspace(0, 2 * np.pi, 5)
 
 
