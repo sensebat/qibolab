@@ -207,10 +207,38 @@ def test_virtual_z(connected, compiled, configs, phase):  # noqa: F811
         connected, configs, compiled, [pulse.new(), VirtualZ(phase=phase), pulse.new()]
     )
     assert rotated[:160] == pytest.approx(expected[:160], abs=1e-6)
-    assert not rotated[80:160] == pytest.approx(rotated[:80], abs=1e-3)
+    assert np.abs(rotated[80:160] - rotated[:80]).max() > 0.1
     assert segments(time, rotated)[0] == (0, 80)  # no time taken
 
 
 def test_virtual_z_alone(connected, configs):  # noqa: F811
     sequence = PulseSequence([("q0/drive", VirtualZ(phase=0.1)), readout()])
     run(connected, configs, [sequence])
+
+
+@pytest.mark.parametrize("chirp", [(1_000_000, "Hz/nsec"), (1_000_000, "GHz/sec")])
+def test_chirp(connected, compiled, configs, chirp):  # noqa: F811
+    """A chirp of 1 MHz/ns adds the phase pi * 1e-3 * t**2 (t in ns) to the samples."""
+    pulse = Pulse(duration=100, amplitude=0.5, envelope=Rectangular())
+    time, plain = drive_output(connected, configs, compiled, [pulse])
+    chirped = pulse.model_copy(update={"chirp": chirp})
+    _, out = drive_output(connected, configs, compiled, [chirped])
+    t = time[:200]
+    assert out[:200] == pytest.approx(
+        plain[:200] * np.exp(1j * np.pi * 1e-3 * t**2), abs=1e-5
+    )
+
+
+def test_chirp_refused(connected, configs):  # noqa: F811
+    pulse = Pulse(duration=100, amplitude=0.5, envelope=Rectangular())
+    for chirp, error in [
+        (([1, 2], "Hz/nsec"), NotImplementedError),
+        (([1, 2], [50, 50], "Hz/nsec"), NotImplementedError),
+        ((1, "Hz/day"), ValueError),
+    ]:
+        chirped = pulse.model_copy(update={"chirp": chirp})
+        with pytest.raises(error, match="chirp"):
+            run(connected, configs, [PulseSequence([("q0/drive", chirped)])])
+    flux = pulse.model_copy(update={"chirp": (1, "Hz/nsec")})
+    with pytest.raises(ValueError, match="chirp"):
+        run(connected, configs, [PulseSequence([("q0/flux", flux)])])

@@ -2,6 +2,7 @@
 
 from functools import cache
 
+import numpy as np
 from laboneq.simple import Experiment, pulse_library
 
 from qibolab._core.components import Channel, Config, DcChannel, IqChannel
@@ -24,6 +25,42 @@ __all__ = []
 NS = 1e-9
 """Qibolab times are in ns, LabOne Q ones in s."""
 
+CHIRP_UNITS = {
+    "Hz/nsec": 1.0,
+    "mHz/nsec": 1e-3,
+    "uHz/nsec": 1e-6,
+    "pHz/nsec": 1e-12,
+    "GHz/sec": 1.0,
+    "MHz/sec": 1e-3,
+    "KHz/sec": 1e-6,
+    "Hz/sec": 1e-9,
+    "mHz/sec": 1e-12,
+}
+"""Factor from each chirp unit (the QUA ones, as in the qm driver) to Hz/ns."""
+
+Chirp = tuple[float, str]
+"""Constant chirp rate and its unit."""
+
+
+def chirp(id: ChannelId, pulse: Pulse) -> Chirp | None:
+    """Check the chirp of ``pulse`` on channel ``id``.
+
+    Only a constant rate is supported, given as ``(rate, unit)``.
+    """
+    if pulse.chirp is None:
+        return None
+    if len(pulse.chirp) != 2 or isinstance(pulse.chirp[0], list):
+        raise NotImplementedError(
+            f"Piecewise chirp on channel '{id}' is not supported, only (rate, unit)."
+        )
+    rate, unit = pulse.chirp
+    if unit not in CHIRP_UNITS:
+        raise ValueError(
+            f"Unknown chirp unit '{unit}' on channel '{id}', "
+            f"use one of {list(CHIRP_UNITS)}."
+        )
+    return rate, unit
+
 
 def samples(id: ChannelId, op: PulseLike, sampling_rate: float) -> None:
     """Check that the durations of ``op`` on channel ``id`` are whole samples.
@@ -42,15 +79,26 @@ def samples(id: ChannelId, op: PulseLike, sampling_rate: float) -> None:
 
 @cache
 def waveform(
-    envelope: Envelope, duration: float, sampling_rate: float, real: bool = False
+    envelope: Envelope,
+    duration: float,
+    sampling_rate: float,
+    real: bool = False,
+    chirp: Chirp | None = None,
 ):
     """Unit-amplitude LabOne Q pulse with the samples of a qibolab envelope.
 
     Equal envelopes give the same object, since an SHFQA output can only hold one
     waveform. With ``real``, for a DC channel, only the i component is kept.
+
+    A ``chirp`` moves the frequency linearly from the oscillator frequency at the
+    start of the pulse, as in QUA: the samples get the phase ``pi * rate * t**2``.
     """
     n = round(duration * sampling_rate)
     samples = envelope.i(n) if real else envelope.i(n) + 1j * envelope.q(n)
+    if chirp is not None:
+        rate = chirp[0] * CHIRP_UNITS[chirp[1]] * NS  # in GHz/ns
+        t = np.arange(n) / sampling_rate
+        samples = samples * np.exp(1j * np.pi * rate * t**2)
     return pulse_library.sampled_pulse(samples)
 
 
@@ -66,8 +114,9 @@ def play(
 
     Pulses play on IQ channels and, with real samples, on DC channels (flux and
     coupler lines). A :class:`VirtualZ` increments the phase of the channel's
-    oscillator by its phase. A :class:`Readout` plays its probe pulse and acquires at the same time, integrating
-    with unit weights (custom kernels are not supported). A delay on an acquisition
+    oscillator by its phase. A :class:`Readout` plays its probe pulse and acquires
+    at the same time, integrating with unit weights (custom kernels are not
+    supported). A delay on an acquisition
     channel also delays its probe channel, to keep them aligned. Swept amplitudes are
     taken from ``amplitudes``, by the id of the pulse or of its readout. Durations
     must be whole samples.
@@ -82,13 +131,17 @@ def play(
         elif isinstance(op, Pulse) and isinstance(channel, IqChannel):
             experiment.play(
                 id,
-                pulse=waveform(op.envelope, op.duration, sampling_rate),
+                pulse=waveform(
+                    op.envelope, op.duration, sampling_rate, chirp=chirp(id, op)
+                ),
                 amplitude=amplitudes.get(op.id, op.amplitude),
                 phase=op.relative_phase,
             )
         elif isinstance(op, Pulse) and isinstance(channel, DcChannel):
-            if op.relative_phase != 0:
-                raise ValueError(f"A pulse on the DC channel '{id}' has no phase.")
+            if op.relative_phase != 0 or op.chirp is not None:
+                raise ValueError(
+                    f"A pulse on the DC channel '{id}' has no phase or chirp."
+                )
             experiment.play(
                 id,
                 pulse=waveform(op.envelope, op.duration, sampling_rate, real=True),
@@ -99,7 +152,12 @@ def play(
         elif isinstance(op, Readout) and configs[id].kernel is None:
             experiment.play(
                 probe,
-                pulse=waveform(op.probe.envelope, op.probe.duration, sampling_rate),
+                pulse=waveform(
+                    op.probe.envelope,
+                    op.probe.duration,
+                    sampling_rate,
+                    chirp=chirp(probe, op.probe),
+                ),
                 amplitude=amplitudes.get(op.id, op.probe.amplitude),
                 phase=op.probe.relative_phase,
             )
