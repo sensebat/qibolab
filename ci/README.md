@@ -80,7 +80,9 @@ another workflow with a token) can send it.
 **Proto branches.** A push runs the workflow file of the pushed commit, so an orkun/proto-*
 branch needs `.github/workflows/zi-driver.yml` from orkun/ci (a branch made from orkun/26.10
 has it once orkun/26.10 has merged orkun/ci). The ci scripts and the conformance suite always
-come from orkun/ci. Without the file, use the dispatch:
+come from orkun/ci, so orkun/ci must be at ci-rc1 or later: with an older `ci/changes.sh`
+there is no row X and every cell stops at "Check the cell plan". Without the file, use the
+dispatch:
 
     gh workflow run zi-driver.yml -R sensebat/qibolab --ref orkun/ci -f extra_ref=orkun/proto-NAME
 

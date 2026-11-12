@@ -24,4 +24,7 @@ First release candidate of the zi-driver CI on sensebat/qibolab.
   "matrix.name".
 - Conformance suite: contract and effect tests per feature, planted-bug runs, CP1-CP5
   reference files (tests/instruments/zi/conformance).
+- Cells stop at "Check the cell plan" when the plan has no repo or commit (ci scripts on
+  orkun/ci older than the workflow file), instead of testing the run's own commit under the
+  row's label.
 - Docs: ci/README.md.

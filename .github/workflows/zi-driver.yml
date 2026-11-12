@@ -134,6 +134,20 @@ jobs:
         if: matrix.skip
         run: echo "Commits and newest laboneq equal the published state.json; nothing to test."
 
+      # Without repo and sha the checkout below would take this run's own commit and test it
+      # under the row's label. That happens when ci/changes.sh (from scripts_sha) is older
+      # than this workflow file, e.g. an orkun/proto-* push while orkun/ci is older.
+      - name: Check the cell plan
+        if: ${{ !matrix.skip }}
+        env:
+          CELL_REPO: ${{ matrix.repo }}
+          CELL_SHA: ${{ matrix.sha }}
+        run: |
+          if [ -z "$CELL_REPO" ] || [ -z "$CELL_SHA" ]; then
+            echo "::error::cell plan without repo or commit: ci/changes.sh does not match this workflow file (orkun/ci older than ci-rc1?)"
+            exit 1
+          fi
+
       - name: Check out the row's code
         if: ${{ !matrix.skip }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
