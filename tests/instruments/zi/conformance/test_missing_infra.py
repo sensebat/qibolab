@@ -19,12 +19,14 @@ experiment handed to LabOne Q); qibolab ``ExecutionParameters.results_shape``
 (sources/research/driver-tests/README.md, item 2).
 """
 
+import re
+
 import laboneq.simple as lq
 import numpy as np
 import pytest
 from laboneq.core.exceptions import LabOneQException
+from laboneq.dsl.experiment import Acquire, PlayPulse
 from laboneq.dsl.experiment import Delay as LqDelay
-from laboneq.dsl.experiment import PlayPulse
 
 from qibolab._core.components import (
     AcquisitionChannel,
@@ -58,7 +60,7 @@ from .conftest import (
 )
 from .effects import square
 from .mutants import kills
-from .test_conformance import mz, readout_of
+from .test_conformance import mz, readout_of, updated
 
 NS = effects.NS
 
@@ -70,8 +72,9 @@ def start(cap, op) -> float:
     """Start of ``op`` in ns from the start of its sequence, on its own signal.
 
     Sum of the lengths of the operations before it on the same signal, in the real
-    time loop. LabOne Q plays the operations of one signal in order; the sequence
-    section reserves every signal, so all of them start together.
+    time loop: delays, plays and acquisitions (an acquisition holds its signal for
+    its integration length). LabOne Q plays the operations of one signal in order;
+    the sequence section reserves every signal, so all of them start together.
     """
     time = 0.0
     for other in cap.ops():
@@ -83,6 +86,8 @@ def start(cap, op) -> float:
             time += effects.values(other.op.time) / NS
         elif isinstance(other.op, PlayPulse):
             time += cap.duration(other)
+        elif isinstance(other.op, Acquire):
+            time += integration_length(cap, other)
     raise RuntimeError("Operation not found.")
 
 
@@ -321,14 +326,19 @@ def test_chirp_reaches_waveform(platform):
     ],
 )
 def test_duration_off_sample_grid(platform, duration):
-    """A drive pulse whose length is not a whole number of samples plays within half
-    a sample of its length, and the readout after it does not start before it ends.
+    """A drive pulse whose length is not a whole number of samples is refused with an
+    error naming the duration or the sample grid, or plays within half a sample of
+    its length, and the readout after it does not start before it ends.
 
-    Today 40.4 ns (80.8 samples at 2 GSa/s) plays 80 samples, 40.0 ns
-    (``int(duration * sampling_rate)``, zi/pulse.py:27), while the delay before the
-    readout stays 40.4 ns.
+    Refusing is accepted as in test_missing_pulses.py::
+    test_off_grid_duration_refused_or_exact (same feature F51). Today 40.4 ns (80.8
+    samples at 2 GSa/s) plays 80 samples, 40.0 ns (``int(duration *
+    sampling_rate)``, zi/pulse.py:27), while the delay before the readout stays
+    40.4 ns.
 
-    Pattern: zhinst/laboneq-applications v26.4.0 tests/helpers/dsl.py.
+    Pattern: zhinst-qcodes 639ed104f4 and qblox-instruments 1.4.2 error tests
+    (refuse with a clear message); zhinst/laboneq-applications v26.4.0
+    tests/helpers/dsl.py.
     """
     sequence = PulseSequence(
         [
@@ -337,7 +347,12 @@ def test_duration_off_sample_grid(platform, duration):
         ]
     ) + mz(platform)
 
-    cap = effects.play(platform, [sequence])
+    try:
+        cap = effects.play(platform, [sequence])
+    except (ValueError, NotImplementedError, LabOneQException) as error:
+        message = f"{type(error).__name__}: {error}"
+        assert re.search(r"sampl|grid|[Dd]uration", str(error)), message
+        return
 
     half = 0.5 / platform.sampling_rate
     (drive,) = cap.plays("q0/drive")
@@ -534,6 +549,10 @@ def test_default_execute_options(platform):
     zhinst/laboneq-applications v26.4.0 tests/helpers/dsl.py.
     """
     sequence = mz(platform)
+    # a calibrated platform, as test_conformance.py::test_acquisition_type[F17]
+    platform.parameters.configs.update(
+        updated(platform, q0__acquisition={"threshold": 0.0, "iq_angle": 0.0})
+    )
     with effects.capture(platform.instruments["zi"]) as cap:
         results = platform.execute([sequence])
 

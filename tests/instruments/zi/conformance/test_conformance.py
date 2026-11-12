@@ -408,9 +408,15 @@ def test_flux_pulse(platform):
 
 @feature("F47")
 def test_two_readouts_of_one_qubit(platform):
-    """MZ, a delay, MZ again (readout/readout_characterization.py:99-101)."""
+    """MZ, a delay, MZ again (readout/readout_characterization.py:99-101).
+
+    The delay keeps the second readout on the 8 ns readout grid of the first: LabOne
+    Q refuses readouts on one QA line whose starts differ modulo 8 ns.
+    test_missing_pulses.py::test_two_readouts_of_one_qubit_in_order covers an
+    off-grid delay.
+    """
     sequence = mz(platform)
-    sequence.append(("q0/acquisition", Delay(duration=100)))
+    sequence.append(("q0/acquisition", Delay(duration=96)))
     sequence += mz(platform)
     play(platform, [sequence], averaging_mode=AveragingMode.SINGLESHOT)
 

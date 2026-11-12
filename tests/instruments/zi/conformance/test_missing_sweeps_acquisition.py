@@ -45,6 +45,7 @@ from qibolab._core.execution_parameters import (
     ExecutionParameters,
 )
 from qibolab._core.pulses import Delay, VirtualZ
+from qibolab._core.pulses.modulation import demodulate
 from qibolab._core.sequence import PulseSequence
 from qibolab._core.sweeper import Parameter, Sweeper
 
@@ -598,14 +599,17 @@ def test_discrimination(platform):
     and the IQ angle of the q0/acquisition config, and qibolab returns the state
     (0 or 1) LabOne Q measured at each shot.
 
-    LabOne Q decides state 1 when Re(sum of kernel x signal) exceeds the threshold
-    of the signal calibration. qibolab decides it when
+    LabOne Q decides state 0 when Re(sum of kernel x signal) exceeds the threshold
+    of the signal calibration, state 1 otherwise: for 2 states its assignment
+    vector maps "above the threshold" to state 0 (laboneq 26.4.0
+    controller/devices/qachannel.py, ``_calc_theoretical_assignment_vec``, as
+    zhinst.utils.shfqa.multistate). qibolab decides state 1 when
     cos(a) I - sin(a) Q = Re((I + iQ) e^(ia)) exceeds ``threshold``, with
     ``a = iq_angle`` and I + iQ the INTEGRATION result (unit kernel). So the
-    kernel must be a constant c with arg c = a and threshold / |c| = ``threshold``.
-    The sign of arg c is accepted both ways: whether LabOne Q conjugates the kernel
-    was not checked (open point). Today: "AcquisitionType.DISCRIMINATION is not
-    supported." (zi/controller.py:383-384).
+    kernel must be a constant c with arg(-c) = a and threshold / |c| =
+    -``threshold``. The sign of arg(-c) is accepted both ways: whether LabOne Q
+    conjugates the kernel was not checked (open point). Today:
+    "AcquisitionType.DISCRIMINATION is not supported." (zi/controller.py:383-384).
 
     Pattern: qibolab qibosoq driver ``_classify_shots`` (qibosoq/board.py:345-349,
     the qibolab threshold and iq_angle convention); qibocal t1 (coherence/t1.py:75,
@@ -630,12 +634,12 @@ def test_discrimination(platform):
     kernel = cap.samples(acquire)
     c = kernel[0]
     np.testing.assert_allclose(kernel, c, rtol=1e-9, err_msg="kernel not constant")
-    assert min(abs(np.angle(c) - angle), abs(np.angle(c) + angle)) < 1e-9, (
-        f"kernel phase {np.angle(c):.4g} rad, not +-{angle}"
+    assert min(abs(np.angle(-c) - angle), abs(np.angle(-c) + angle)) < 1e-9, (
+        f"phase of -kernel {np.angle(-c):.4g} rad, not +-{angle}"
     )
     lq_threshold = np.atleast_1d(cap.calibration("q0/acquisition").threshold)
     assert lq_threshold.size == 1, f"thresholds {lq_threshold}"
-    assert lq_threshold[0] / abs(c) == pytest.approx(threshold)
+    assert lq_threshold[0] / abs(c) == pytest.approx(-threshold)
     result = cap.results[readout_of(sequence).id]
     assert result.shape == shape(**options)
     expected = states(np.shape(cap.raw.get_data(acquire.op.handle))).real
@@ -652,10 +656,16 @@ def test_discrimination(platform):
 )
 def test_raw_trace(platform):
     """RAW: LabOne Q records q0's trace for the acquisition duration (512 ns, the
-    probe is 1024 ns), and qibolab returns it as one I/Q pair per sample.
+    probe is 1024 ns), and qibolab returns it demodulated to baseband, as one I/Q
+    pair per sample.
 
-    Expected: 512 ns at 2 GSa/s = 1024 samples, each the LabOne Q trace sample in
-    order. Today: "AcquisitionType.RAW is not supported." (zi/controller.py:383-384).
+    Expected: 512 ns at 2 GSa/s = 1024 samples: the LabOne Q trace in order,
+    demodulated at the probe frequency relative to its LO with qibolab's
+    ``demodulate``. qibolab ``AcquisitionType.RAW``: "Return the waveform,
+    demodulated to baseband" (execution_parameters.py); the qblox driver
+    demodulates its scope trace the same way (qblox/results.py ``_scope``). The
+    SHFQA trace is relative to the LO, so it still oscillates at that frequency.
+    Today: "AcquisitionType.RAW is not supported." (zi/controller.py:383-384).
 
     Pattern: qibocal time_of_flight_readout (signal_experiments/
     time_of_flight_readout.py:102, qibocal b559e4a7); qibolab
@@ -679,7 +689,10 @@ def test_raw_trace(platform):
     result = cap.results[readout.id]
     assert result.shape == shape(samples=samples, acquisition_type=AcquisitionType.RAW)
     [trace] = cap.data("q0/acquisition")
-    np.testing.assert_array_equal(result, iq(trace))
+    lo = platform.config(platform.channels["q0/probe"].lo).frequency
+    offset = (platform.config("q0/probe").frequency - lo) * NS  # GHz
+    baseband = demodulate(iq(trace).T, offset, platform.sampling_rate).T
+    np.testing.assert_allclose(result, baseband, rtol=1e-9, atol=1e-9)
 
 
 # F21 SEQUENTIAL
@@ -808,6 +821,10 @@ def test_default_execute_returns_states(platform):
     """
     sequence = mz(platform)
     nshots = platform.settings.nshots
+    # a calibrated platform, as test_conformance.py::test_acquisition_type[F17]
+    platform.parameters.configs.update(
+        updated(platform, q0__acquisition={"threshold": 0.0, "iq_angle": 0.0})
+    )
 
     zi = platform.instruments["zi"]
     with injected(platform, states), effects.capture(zi) as cap:

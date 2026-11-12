@@ -412,10 +412,18 @@ def test_kernel_weights_reach_acquire(platform):
     LabOneQException,
     "multiple 'play' operations in section",
 )
-def test_two_readouts_of_one_qubit_in_order(platform):
-    """F47. MZ, 100 ns, MZ on q0, single shots: q0's probe plays twice, the second
-    one 1024 + 100 ns after the first; each readout integrates with its own handle
-    and returns one result per shot.
+@pytest.mark.parametrize(
+    "wait", [pytest.param(96, id="on-grid"), pytest.param(100, id="off-grid")]
+)
+def test_two_readouts_of_one_qubit_in_order(platform, wait):
+    """F47. MZ, ``wait`` ns, MZ on q0, single shots: q0's probe plays twice, the
+    second one 1024 + ``wait`` ns after the first; each readout integrates with its
+    own handle and returns one result per shot.
+
+    On grid (96 ns): the second readout starts a multiple of 8 ns after the first.
+    Off grid (100 ns): LabOne Q refuses readouts on one QA line whose starts differ
+    modulo 8 ns (the SHFQA readout grid, 16 samples), so a refusal naming the grid
+    is accepted there, as for F51; exact timing is too.
 
     Today LabOne Q rejects the experiment: "There are multiple 'play' operations in
     section" (one section per sequence, zi/controller.py:410).
@@ -424,12 +432,19 @@ def test_two_readouts_of_one_qubit_in_order(platform):
     99-101); zhinst/laboneq-applications v26.4.0 tests/helpers/dsl.py.
     """
     sequence = mz(platform)
-    sequence.append(("q0/acquisition", Delay(duration=100)))
+    sequence.append(("q0/acquisition", Delay(duration=wait)))
     sequence += mz(platform)
     first, second = (ro for _, ro in sequence.acquisitions)
-    gap = first.duration + 100
+    gap = first.duration + wait
 
-    cap = effects.play(platform, [sequence], averaging_mode=AveragingMode.SINGLESHOT)
+    try:
+        cap = effects.play(
+            platform, [sequence], averaging_mode=AveragingMode.SINGLESHOT
+        )
+    except ValueError as error:
+        assert gap % 8, f"refused on the 8 ns grid: {error}"
+        assert re.search(r"grid|modulo|8 ns", str(error)), f"ValueError: {error}"
+        return
 
     plays = cap.plays("q0/probe")
     assert [start(cap, op) for op in plays] == pytest.approx([0, gap])

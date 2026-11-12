@@ -293,8 +293,12 @@ def test_unsupported_acquisition_type(platform, acquisition_type):
         else:
             assert result.shape == _shape(acquisition_type=acquisition_type)
 
+    # a calibrated platform, as test_conformance.py::test_acquisition_type[F17]
+    configs = updated(platform, q0__acquisition={"threshold": 0.0, "iq_angle": 0.0})
     refused_or_works(
-        lambda: effects.play(platform, [sequence], acquisition_type=acquisition_type),
+        lambda: effects.play(
+            platform, [sequence], configs=configs, acquisition_type=acquisition_type
+        ),
         [name],
         works,
     )
