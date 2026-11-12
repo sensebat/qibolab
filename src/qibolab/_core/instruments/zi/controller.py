@@ -427,8 +427,9 @@ class ZiController(Controller):
         if options.fast_reset:
             raise NotImplementedError("Fast reset is not supported.")
 
+        windows = pulse.windows(sequences, self.channels)
         layouts = [
-            pulse.layout(sequence, self.channels, self.sampling_rate)
+            pulse.layout(sequence, self.channels, self.sampling_rate, windows)
             for sequence in sequences
         ]
         pulse.check_lines(layouts, self.channels)
@@ -438,6 +439,7 @@ class ZiController(Controller):
         )
         experiment = self._experiment(ids, calib)
         amplitudes: sweep.Amplitudes = {}
+        slots: pulse.Slots = {}
         near, real, axes = sweep.split(
             sweepers, self.channels, configs, calib, amplitudes
         )
@@ -462,9 +464,10 @@ class ZiController(Controller):
                         configs,
                         self.sampling_rate,
                         amplitudes,
+                        slots,
                     )
                 with experiment.section():
-                    for id in ids:
+                    for id in experiment.signals:
                         experiment.delay(id, time=options.relaxation_time * pulse.NS)
 
         data = self.session.run(self.session.compile(experiment))

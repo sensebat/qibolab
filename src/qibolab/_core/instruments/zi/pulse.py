@@ -138,6 +138,17 @@ class Measure:
     """Time in ns from the start of the section to the measure."""
     length: float = 0.0
     """Length in ns of the section, on :data:`READOUT_GRID`."""
+    window: float = 0.0
+    """Time in ns the acquisition takes, the longest one on its QA line.
+
+    The SHFQA integrates for the same time on all the integrators of a QA line, so
+    LabOne Q extends shorter acquisitions; the weights after their end are zero.
+    """
+
+    @property
+    def end(self) -> float:
+        """End in ns of the measure, from the start of its section."""
+        return self.wait + max(self.window, self.probe.duration)
 
 
 Run = tuple[ChannelId, list[PulseLike]]
@@ -190,10 +201,10 @@ def _measures(
             raise NotImplementedError(
                 f"{type(op).__name__} on channel '{id}' is not supported."
             )
-    for time, pulse in pulses.items():
+    if len(pulses) > 0:
         raise ValueError(
-            f"Pulse at {time} ns on '{probe}' has no acquisition starting at the "
-            f"same time on '{id}'."
+            f"Pulse at {min(pulses)} ns on '{probe}' has no acquisition starting at "
+            f"the same time on '{id}'."
         )
     for _, op in probe_ops:
         if not isinstance(op, (Pulse, Delay)):
@@ -203,8 +214,36 @@ def _measures(
     return sorted(measures, key=lambda measure: measure[0])
 
 
+Line = tuple[str | None, str | None]
+"""QA line, as the instrument and port of its acquisition channels."""
+
+
+def _qa_line(channel: Channel) -> Line:
+    """QA line of an acquisition channel."""
+    return (channel.device, channel.path)
+
+
+def windows(
+    sequences: list[PulseSequence], channels: dict[ChannelId, Channel]
+) -> dict[Line, float]:
+    """Longest acquisition in ns on each QA line, see :attr:`Measure.window`."""
+    out: dict[Line, float] = {}
+    for sequence in sequences:
+        for id, op in sequence.acquisitions:
+            duration = (
+                op.acquisition.duration if isinstance(op, Readout) else op.duration
+            )
+            line = _qa_line(channels[id])
+            out[line] = max(out.get(line, 0.0), duration)
+    return out
+
+
 def _line(
-    id: ChannelId, ops: Timeline, probe: ChannelId, probe_ops: Timeline
+    id: ChannelId,
+    ops: Timeline,
+    probe: ChannelId,
+    probe_ops: Timeline,
+    window: float,
 ) -> list[Block]:
     """Blocks of an acquisition channel and its probe channel.
 
@@ -220,13 +259,14 @@ def _line(
         if anchor < start:
             raise ValueError(
                 f"Readout at {begin} ns on '{id}' is too close to the previous one, "
-                f"whose section ends at {start} ns on the {READOUT_GRID} ns grid."
+                f"which ends at {start} ns: it lasts as long as the longest "
+                f"acquisition on its QA line, then up to the {READOUT_GRID} ns grid."
             )
         if anchor > start:
             blocks.append((start, anchor, (id, [Delay(duration=anchor - start)])))
-        end = _grid(begin + max(measure.duration, measure.probe.duration))
-        measure = replace(measure, wait=begin - anchor, length=end - anchor)
-        blocks.append((anchor, end, measure))
+        measure = replace(measure, wait=begin - anchor, window=window)
+        end = _grid(anchor + measure.end)
+        blocks.append((anchor, end, replace(measure, length=end - anchor)))
         start = end
     time = max(t + op.duration for t, op in ops + probe_ops)
     if time > start:
@@ -242,16 +282,14 @@ def check_lines(layouts: list[list[Block]], channels: dict[ChannelId, Channel]) 
     the grid is one setting. LabOne Q reports both with less clear messages, or,
     for the second one, only on some versions.
     """
-    offsets: dict[tuple, tuple[float, ChannelId]] = {}
+    offsets: dict[Line, tuple[float, ChannelId]] = {}
     for blocks in layouts:
-        lines: dict[tuple, list[tuple[float, float, ChannelId]]] = {}
+        lines: dict[Line, list[tuple[float, float, ChannelId]]] = {}
         for start, _, block in blocks:
             if not isinstance(block, Measure):
                 continue
-            channel = channels[block.acquisition]
-            line = (channel.device, channel.path)
-            id, begin = block.acquisition, start + block.wait
-            end = begin + max(block.duration, block.probe.duration)
+            line = _qa_line(channels[block.acquisition])
+            id, begin, end = block.acquisition, start + block.wait, start + block.end
             for other_begin, other_end, other in lines.get(line, []):
                 if begin < other_end and other_begin < end and begin != other_begin:
                     raise ValueError(
@@ -272,7 +310,10 @@ def check_lines(layouts: list[list[Block]], channels: dict[ChannelId, Channel]) 
 
 
 def layout(
-    sequence: PulseSequence, channels: dict[ChannelId, Channel], sampling_rate: float
+    sequence: PulseSequence,
+    channels: dict[ChannelId, Channel],
+    sampling_rate: float,
+    windows: dict[Line, float],
 ) -> list[Block]:
     """Split ``sequence`` in blocks, sorted by start time.
 
@@ -298,7 +339,13 @@ def layout(
         and (id in timelines or channel.probe in timelines)
     }
     for id, probe in lines.items():
-        blocks += _line(id, timelines.get(id, []), probe, timelines.get(probe, []))
+        blocks += _line(
+            id,
+            timelines.get(id, []),
+            probe,
+            timelines.get(probe, []),
+            windows.get(_qa_line(channels[id]), 0.0),
+        )
     for id, ops in timelines.items():
         if id not in lines and id not in lines.values():
             blocks.append(
@@ -352,6 +399,37 @@ def _kernel(weights: tuple[complex, ...]):
     return pulse_library.sampled_pulse(np.array(weights))
 
 
+Slots = dict[ChannelId, list[tuple]]
+"""Probe settings of each readout slot, by acquisition channel; see :func:`_slot`."""
+
+
+def _slot(
+    experiment: Experiment, slots: Slots, id: ChannelId, probe: ChannelId, key: tuple
+) -> tuple[ChannelId, ChannelId, list[ChannelId]]:
+    """Probe and acquisition signals of a measure, and all the signals of its line.
+
+    An SHFQA generator holds one probe pulse per signal and real-time loop: one
+    waveform, amplitude and phase. A measure whose probe differs (``key``) from the
+    earlier ones on the same acquisition channel gets a new slot: new experiment
+    signals ``{probe}/{n}`` and ``{id}/{n}``, mapped to the same ports, with the
+    same calibration. Each slot takes one generator waveform and one integrator.
+    """
+    keys = slots.setdefault(id, [])
+    if key not in keys:
+        keys.append(key)
+        if len(keys) > 1:
+            for base in (probe, id):
+                signal = experiment.signals[base]
+                new = experiment.add_signal(
+                    f"{base}/{len(keys) - 1}",
+                    connect_to=signal.mapped_logical_signal_path,
+                )
+                new.calibration = signal.calibration
+    names = [(probe, id)] + [(f"{probe}/{n}", f"{id}/{n}") for n in range(1, len(keys))]
+    probe_signal, acquisition_signal = names[keys.index(key)]
+    return probe_signal, acquisition_signal, [s for pair in names for s in pair]
+
+
 def _measure(
     experiment: Experiment,
     measure: Measure,
@@ -359,6 +437,7 @@ def _measure(
     configs: dict[str, Config],
     sampling_rate: float,
     amplitudes: Amplitudes,
+    slots: Slots,
 ) -> None:
     """Add the probe pulse and the acquisition of a measure to the current section.
 
@@ -366,6 +445,9 @@ def _measure(
     acquisition config, which must have one weight per sample. The kernel multiplies
     the samples as it is, as qibocal computes it (the conjugate of the difference of
     the two states): LabOne Q conjugates kernels, so it gets the conjugate.
+
+    The signals come from :func:`_slot`; the other signals of the line are reserved,
+    so that the measures of one channel keep their order.
     """
     id = measure.acquisition
     probe = channels[id].iqout(id)
@@ -380,27 +462,33 @@ def _measure(
         )
     else:
         kernel = _kernel(tuple(np.conj(weights)))
+    pulse = measure.probe
+    amplitude = amplitudes.get(measure.sweep, pulse.amplitude)
+    key = (
+        pulse.envelope,
+        pulse.duration,
+        chirp(probe, pulse),
+        ("swept", measure.sweep) if measure.sweep in amplitudes else amplitude,
+        pulse.relative_phase,
+        measure.duration,
+    )
+    probe_signal, signal, line = _slot(experiment, slots, id, probe, key)
+    for other in set(line) - {probe_signal, signal}:
+        experiment.reserve(other)
     if measure.wait > 0:
-        experiment.delay(probe, time=measure.wait * NS)
-        experiment.delay(id, time=measure.wait * NS)
+        experiment.delay(probe_signal, time=measure.wait * NS)
+        experiment.delay(signal, time=measure.wait * NS)
     experiment.play(
-        probe,
+        probe_signal,
         pulse=waveform(
-            measure.probe.envelope,
-            measure.probe.duration,
-            sampling_rate,
-            chirp=chirp(probe, measure.probe),
+            pulse.envelope, pulse.duration, sampling_rate, chirp=chirp(probe, pulse)
         ),
-        amplitude=amplitudes.get(measure.sweep, measure.probe.amplitude),
-        phase=measure.probe.relative_phase,
+        amplitude=amplitude,
+        phase=pulse.relative_phase,
     )
-    experiment.acquire(
-        id,
-        handle=str(measure.handle),
-        kernel=kernel,
-    )
-    for signal, duration in [(probe, measure.probe.duration), (id, measure.duration)]:
-        experiment.delay(signal, time=(measure.length - measure.wait - duration) * NS)
+    experiment.acquire(signal, handle=str(measure.handle), kernel=kernel)
+    for name, duration in [(probe_signal, pulse.duration), (signal, measure.window)]:
+        experiment.delay(name, time=(measure.length - measure.wait - duration) * NS)
 
 
 def play(
@@ -410,6 +498,7 @@ def play(
     configs: dict[str, Config],
     sampling_rate: float,
     amplitudes: Amplitudes,
+    slots: Slots,
 ) -> None:
     """Add the blocks of a sequence to the current section, one subsection each.
 
@@ -417,7 +506,8 @@ def play(
     channels (flux and coupler lines). A :class:`VirtualZ` increments the phase of
     the channel's oscillator by its phase. A measure plays its probe pulse and
     acquires at the same time. Swept amplitudes are
-    taken from ``amplitudes``, by the id of the pulse or of its readout.
+    taken from ``amplitudes``, by the id of the pulse or of its readout. ``slots``
+    is shared by the sequences of one experiment, see :func:`_slot`.
     """
     for _, _, block in blocks:
         if isinstance(block, Measure):
@@ -425,7 +515,13 @@ def play(
                 length=block.length * NS, section_timing_mode=SectionTimingMode.STRICT
             ):
                 _measure(
-                    experiment, block, channels, configs, sampling_rate, amplitudes
+                    experiment,
+                    block,
+                    channels,
+                    configs,
+                    sampling_rate,
+                    amplitudes,
+                    slots,
                 )
         else:
             with experiment.section():

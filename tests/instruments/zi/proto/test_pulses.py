@@ -28,6 +28,7 @@ from qibolab._core.pulses import (
     Custom,
     Delay,
     Exponential,
+    Gaussian,
     Pulse,
     Readout,
     Rectangular,
@@ -475,3 +476,81 @@ def test_kernel_length(connected, configs):  # noqa: F811
     configs["q0/acquisition"] = config.model_copy(update={"kernel": np.ones(1000)})
     with pytest.raises(ValueError, match="1000 samples"):
         run(connected, configs, [PulseSequence([readout()])])
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"duration": 400},
+        {"amplitude": 0.2},
+        {"relative_phase": 0.5},
+        {"envelope": Gaussian(rel_sigma=0.2)},
+    ],
+)
+def test_several_probes_per_qubit(connected, compiled, configs, update):  # noqa: F811
+    """Two sequences read out one qubit with different probe pulses (audit G4/X04).
+
+    The second probe gets its own experiment signals on the same ports.
+    """
+    other = PROBE.model_copy(update=update)
+    sequences = [PulseSequence([readout(0)]), PulseSequence([readout(0, other)])]
+    run(connected, configs, sequences)
+    time, out = wave(connected, compiled[-1], "q0/probe", 3.5e-6)
+    # first readout, 1000 ns relaxation, second readout
+    assert segments(time, out)[0] == (0, 1000)
+    second = out[time >= 2000][: round(other.duration * 2)]
+    first = out[time >= 0][: round(PROBE.duration * 2)]
+    expected = (
+        other.amplitude
+        / PROBE.amplitude
+        * np.exp(1j * other.relative_phase)
+        * other.envelope.i(len(second))
+    )
+    # same oscillator phase at 0 and at 2000 ns (multiple of 1/oscillator frequency)
+    assert second == pytest.approx(first[: len(second)] * expected, abs=1e-6)
+
+
+def test_acquisitions_of_different_length(connected, compiled, configs):  # noqa: F811
+    """A 400 ns readout next to a 1000 ns one on the same QA line.
+
+    The SHFQA integrates for the same time on one QA line: the shorter acquisition
+    takes 1000 ns too, so a next readout of q0 cannot start before.
+    """
+    short = PROBE.model_copy(update={"duration": 400})
+    first = [readout(0, short), readout(1)]
+    sequence = PulseSequence(
+        first + [("q0/acquisition", Delay(duration=608)), readout(0, short)]
+    )
+    run(connected, configs, [sequence])
+    assert probe_segments(connected, compiled) == [(0, 1000), (1008, 1408)]
+    sequence = PulseSequence(
+        first + [("q0/acquisition", Delay(duration=200)), readout(0, short)]
+    )
+    with pytest.raises(ValueError, match="too close"):
+        run(connected, configs, [sequence])
+
+
+def test_two_probes_in_one_sequence(connected, compiled, configs):  # noqa: F811
+    """A short and a long readout of one qubit, mid-circuit."""
+    short = PROBE.model_copy(update={"duration": 400})
+    sequence = PulseSequence(
+        [readout(0, short), ("q0/acquisition", Delay(duration=600)), readout(0)]
+    )
+    results = run(connected, configs, [sequence])
+    assert len(results) == 2
+    assert probe_segments(connected, compiled) == [(0, 400), (1000, 2000)]
+
+
+def test_several_probes_multiplexed(connected, configs):  # noqa: F811
+    """Different probes for q0 next to the same probe for q1, with a sweep."""
+    short = PROBE.model_copy(update={"duration": 400})
+    sequences = [
+        PulseSequence([readout(0), readout(1)]),
+        PulseSequence([readout(0, short), readout(1)]),
+    ]
+    sweeper = Sweeper(
+        parameter=Parameter.amplitude,
+        values=np.array([0.1, 0.2]),
+        pulses=[ro for seq in sequences for _, ro in seq.acquisitions],
+    )
+    assert len(run(connected, configs, sequences, [[sweeper]])) == 4
