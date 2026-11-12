@@ -92,6 +92,35 @@ Real time vs near time after this branch: frequency of a hardware-modulated chan
 | G4 / X04: two probe waveforms or amplitudes on one probe signal in one real-time loop | SHFQA limit. Refuse before compiling, naming the qubit and the two pulses. | refused by LabOne Q in both versions |
 | F45: fast reset | After each readout: `with match(handle=...)`, `case(state=0)` empty, `case(state=1)` plays the reset pulse on the qubit drive. Works with INTEGRATION and DISCRIMINATION (threshold set). The controller does not know the natives: add a `ZiController` field mapping each acquisition channel to `(drive channel, pulse)`; refuse fast reset for a channel without it. | OK (emulation; feedback latency not modelled) |
 
+## pulses: done and not done
+
+State of `orkun/proto-pulses`. All checks are LabOne Q emulation and the LabOne Q output simulator, on 26.4.0 and 26.10.1. Tests: `tests/instruments/zi/proto/test_pulses.py`.
+
+Done: F28, F35, F36, F37 on flux, F05 (near time), X09 (DC pulses); F27 (VirtualZ); G5/X02 (constant-rate chirp); F39 (filters); G6/X05 (refused, see below); G3/X03, F47 (readout layout); F25; F41; G4/X04 (slots).
+This branch took over from proto-acquisition: G3/X03, F47, F25, F41, G4/X04.
+
+Layout (`zi/pulse.py`, `layout`, `check_lines`):
+- A channel without readouts is one section. An acquisition channel and its probe channel are split in one section per readout and delay sections between them.
+- A readout section starts on the 8 ns grid before the readout and ends on the grid after it, in LabOne Q strict timing mode: a wrong grid raises instead of moving a readout.
+- The SHFQA integrates for the same time on one QA line: every readout on a line takes as long as the longest acquisition on that line in the call.
+- A readout whose probe pulse (waveform, amplitude or phase) differs from the earlier ones of its qubit gets new experiment signals `{probe}/{n}`, `{acquisition}/{n}` on the same ports.
+- Refused before compiling, with channel and times: overlapping readouts on one QA line with different starts; readouts on one QA line whose starts differ modulo 8 ns (26.10.1 refuses this per QA line, 26.4.0 only per signal); a readout that starts before the previous one on its channel ends on the grid.
+
+Not done:
+- G6 as planned in proto-sweeps (functional pulse with exact length): here a duration that is not a whole number of samples is refused (`ValueError`). Choose one at the merge.
+- SHFQC (G7/X17), UHFQA, HDAWG IQ outputs, SHFPPC: not in this round; the old refusals stay.
+- X07 (pulse on an acquisition channel): refused with the existing message.
+
+Needs hardware data:
+- Phase sign: in the simulator, `play(phase=p)` shows the samples times `exp(-1j * p)` on the SHFSG output and `exp(1j * p)` on the SHFQA output. VirtualZ is checked only to equal a relative phase. The chirp sign follows the samples (`exp(1j * pi * rate * t**2)`).
+- Kernel convention: LabOne Q writes `conj(kernel)` times the oscillator as weights. The driver passes `conj(config.kernel)`, so the weights are the qibocal kernel times the unit weights.
+- Filters: `tau` in samples at the controller rate (2 GSps with SHF instruments) to s; the HDAWG exponential and FIR models against qibolab's `ExponentialFilter`/`FiniteImpulseResponseFilter`. LabOne Q enforces 8 exponentials and 40 FIR coefficients; the HDAWG `PC` option is needed.
+- Slots: each slot uses one SHFQA generator waveform and one integrator; the number per QA line (8 or 16 by option) is not checked by the driver.
+
+Merge notes:
+- `pulse.play` now takes the blocks of `pulse.layout` and a `slots` dict; the controller builds the layouts before the experiment.
+- The layout uses fixed durations. A real-time duration sweep (proto-sweeps) moves later readouts; `layout` and `check_lines` must then use the longest swept duration, or refuse.
+
 ## Version notes
 
 - `pulse_library.sampled_pulse_complex` and `sampled_pulse_real` are gone in 26.10.1. Use `sampled_pulse` (both versions).
