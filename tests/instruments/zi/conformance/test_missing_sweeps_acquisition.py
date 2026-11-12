@@ -31,6 +31,7 @@ from contextlib import contextmanager
 import laboneq.simple as lq
 import numpy as np
 import pytest
+from laboneq.controller.devices.qachannel import _calc_theoretical_assignment_vec
 from laboneq.dsl.experiment import (
     Case,
     Match,
@@ -599,16 +600,17 @@ def test_discrimination(platform):
     and the IQ angle of the q0/acquisition config, and qibolab returns the state
     (0 or 1) LabOne Q measured at each shot.
 
-    LabOne Q decides state 0 when Re(sum of kernel x signal) exceeds the threshold
-    of the signal calibration, state 1 otherwise: for 2 states its assignment
-    vector maps "above the threshold" to state 0 (laboneq 26.4.0
-    controller/devices/qachannel.py, ``_calc_theoretical_assignment_vec``, as
-    zhinst.utils.shfqa.multistate). qibolab decides state 1 when
+    LabOne Q compares Re(sum of kernel x signal) with the threshold of the signal
+    calibration, and its 2-state assignment vector (controller/devices/
+    qachannel.py, ``_calc_theoretical_assignment_vec``) gives the state above the
+    threshold: state 0 in laboneq 26.4.0 (zhinst-utils 0.7.1), state 1 in 26.10.1
+    (zhinst-utils 0.7.2 swaps the states of each weight). ``sign`` is -1 or +1
+    accordingly. qibolab decides state 1 when
     cos(a) I - sin(a) Q = Re((I + iQ) e^(ia)) exceeds ``threshold``, with
     ``a = iq_angle`` and I + iQ the INTEGRATION result (unit kernel). So the
-    kernel must be a constant c with arg(-c) = a and threshold / |c| =
-    -``threshold``. The sign of arg(-c) is accepted both ways: whether LabOne Q
-    conjugates the kernel was not checked (open point). Today:
+    kernel must be a constant c with arg(sign c) = a and threshold / |c| =
+    sign ``threshold``. The sign of arg(sign c) is accepted both ways: whether
+    LabOne Q conjugates the kernel was not checked (open point). Today:
     "AcquisitionType.DISCRIMINATION is not supported." (zi/controller.py:383-384).
 
     Pattern: qibolab qibosoq driver ``_classify_shots`` (qibosoq/board.py:345-349,
@@ -616,6 +618,7 @@ def test_discrimination(platform):
     qibocal b559e4a7); zhinst/laboneq-applications v26.4.0 tests/helpers/dsl.py.
     """
     threshold, angle = 0.05, 0.3
+    sign = 1 if _calc_theoretical_assignment_vec(1)[1] == 1 else -1
     configs = updated(
         platform, q0__acquisition={"threshold": threshold, "iq_angle": angle}
     )
@@ -634,12 +637,13 @@ def test_discrimination(platform):
     kernel = cap.samples(acquire)
     c = kernel[0]
     np.testing.assert_allclose(kernel, c, rtol=1e-9, err_msg="kernel not constant")
-    assert min(abs(np.angle(-c) - angle), abs(np.angle(-c) + angle)) < 1e-9, (
-        f"phase of -kernel {np.angle(-c):.4g} rad, not +-{angle}"
+    turned = sign * c
+    assert min(abs(np.angle(turned) - angle), abs(np.angle(turned) + angle)) < 1e-9, (
+        f"phase of {sign} x kernel {np.angle(turned):.4g} rad, not +-{angle}"
     )
     lq_threshold = np.atleast_1d(cap.calibration("q0/acquisition").threshold)
     assert lq_threshold.size == 1, f"thresholds {lq_threshold}"
-    assert lq_threshold[0] / abs(c) == pytest.approx(-threshold)
+    assert lq_threshold[0] / abs(c) == pytest.approx(sign * threshold)
     result = cap.results[readout_of(sequence).id]
     assert result.shape == shape(**options)
     expected = states(np.shape(cap.raw.get_data(acquire.op.handle))).real
