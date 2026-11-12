@@ -108,9 +108,9 @@ def pulse_samples(p: Pulse, rate: float) -> np.ndarray:
     return p.i(rate) + 1j * p.q(rate)
 
 
-def readout(duration=960, amplitude=0.1):
+def readout(duration=960, amplitude=0.1, phase=0.0):
     """Readout with a rectangular probe; 960 ns keeps every time on a 40 ns grid."""
-    return Readout.from_probe(square(duration, amplitude))
+    return Readout.from_probe(square(duration, amplitude, phase))
 
 
 def approx_segments(expected):
@@ -428,18 +428,23 @@ def test_readout_is_probe_and_acquisition(platform):
 
 
 @pytest.mark.feature("F23")
-@kills("readout_probe_swapped", "acquisition_handles_swapped")
+@kills(
+    "readout_probe_swapped",
+    "acquisition_handles_swapped",
+    "phase_dropped",
+    "probe_phase_dropped",
+)
 def test_multiplexed_readouts_on_their_channels(platform):
     """Readouts of two qubits: each probe and acquisition on that qubit's channels.
 
-    q0 probes at amplitude 0.1, q1 at 0.2. Each probe channel plays its own
-    amplitude; each acquisition channel acquires with its own readout's handle; all
-    start together.
+    q0 probes at amplitude 0.1 and phase 0.4, q1 at 0.2 and phase -0.9. Each probe
+    channel plays its own amplitude and relative phase; each acquisition channel
+    acquires with its own readout's handle; all start together.
 
     Pattern: zhinst/laboneq-applications v26.4.0 tests/helpers/dsl.py (per-signal
     DSL checks).
     """
-    ro0, ro1 = readout(amplitude=0.1), readout(amplitude=0.2)
+    ro0, ro1 = readout(amplitude=0.1, phase=0.4), readout(amplitude=0.2, phase=-0.9)
     sequence = PulseSequence([("q0/acquisition", ro0), ("q1/acquisition", ro1)])
 
     cap = effects.play(platform, [sequence], nshots=1)
@@ -447,6 +452,7 @@ def test_multiplexed_readouts_on_their_channels(platform):
     for q, ro in (("q0", ro0), ("q1", ro1)):
         [play] = cap.plays(f"{q}/probe")
         assert cap.amplitude(play) == pytest.approx(ro.probe.amplitude)
+        assert cap.phase(play) == pytest.approx(ro.probe.relative_phase)
         assert cap.handles(f"{q}/acquisition") == [str(ro.id)]
     output = Output(cap)
     for q in ("q0", "q1"):

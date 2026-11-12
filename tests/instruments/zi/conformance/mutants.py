@@ -395,6 +395,16 @@ def samples_iq_swapped(mp):
     _samples(mp, lambda samples: samples.imag + 1j * samples.real)
 
 
+@mutant("relative phase of probe pulses is dropped")
+def probe_phase_dropped(mp):
+    def play(experiment, signal, kwargs):
+        if signal.endswith("/probe"):
+            kwargs.pop("phase", None)
+        return signal, kwargs
+
+    _wrap_pulse_play(mp, play=play)
+
+
 @mutant("samples are computed at the HDAWG rate (2.4 GSa/s) on SHF instruments")
 def sampling_rate_hdawg(mp):
     mp.setattr(
