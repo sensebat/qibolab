@@ -56,6 +56,9 @@ from qibolab._core.execution_parameters import (
     ExecutionParameters,
 )
 from qibolab._core.identifier import ChannelId
+from qibolab._core.pulses import Delay as Wait
+from qibolab._core.pulses import Pulse, Rectangular
+from qibolab._core.sequence import PulseSequence
 
 __all__ = [
     "Capture",
@@ -64,7 +67,10 @@ __all__ = [
     "Op",
     "SweepLoop",
     "capture",
+    "drives_then_mz",
+    "iq",
     "play",
+    "square",
     "values",
 ]
 
@@ -189,15 +195,28 @@ class Capture:
             calib = exp.get_calibration().calibration_items.get(signal)
         if calib is None:
             path = exp.signals[signal].mapped_logical_signal_path
-            calib = self._logical(path).calibration
+            calib = self.logical_signal(path).calibration
         return calib
 
-    def _logical(self, path: str):
+    def logical_signal(self, path: str):
+        """Logical signal of the device setup at ``path``."""
         for group in self.setup.logical_signal_groups.values():
             for ls in group.logical_signals.values():
                 if ls.path == path:
                     return ls
         raise KeyError(f"No logical signal at '{path}'.")
+
+    def calibration(self, channel: ChannelId):
+        """LabOne Q signal calibration of the channel's signal."""
+        return self._calibration(self.signal_of(channel))
+
+    def port_delay(self, channel: ChannelId) -> float:
+        """Port delay of the channel's signal in ns, 0 when not set.
+
+        LabOne Q shifts every operation of a signal by its port delay.
+        """
+        delay = values(self.calibration(channel).port_delay)
+        return 0.0 if delay is None else delay / NS
 
     # signal <-> channel
 
@@ -231,7 +250,7 @@ class Capture:
         if len(candidates) == 1:
             return candidates[0]
         path = self.experiment.signals[signal].mapped_logical_signal_path
-        name = self._logical(path).uid
+        name = self.logical_signal(path).uid
         return name if name in candidates else None
 
     def signals_of(self, channel: ChannelId) -> list[str]:
@@ -485,6 +504,39 @@ class Capture:
                 wait = wait + values(after.op.time) / NS
             waits.append(wait)
         return waits
+
+
+def iq(data) -> np.ndarray:
+    """Complex LabOne Q data as qibolab I/Q pairs on the last axis."""
+    data = np.asarray(data)
+    return np.stack([data.real, data.imag], axis=-1)
+
+
+def square(duration=40, amplitude=0.3, phase=0.0) -> Pulse:
+    """Rectangular pulse, the scenario pulse of the effect tests."""
+    return Pulse(
+        duration=duration,
+        amplitude=amplitude,
+        envelope=Rectangular(),
+        relative_phase=phase,
+    )
+
+
+def drives_then_mz(platform, drives: dict) -> PulseSequence:
+    """Pulses on drive channels, a delay on each readout line, then MZ of those qubits.
+
+    ``drives`` maps a qubit to its drive pulses (qibocal rabi/utils.py:324).
+    """
+    sequence = PulseSequence()
+    for q, pulses in drives.items():
+        for p in pulses:
+            sequence.append((f"{q}/drive", p))
+    longest = max(sum(p.duration for p in pulses) for pulses in drives.values())
+    for q in drives:
+        sequence.append((f"{q}/acquisition", Wait(duration=longest)))
+    for q in drives:
+        sequence += platform.natives.single_qubit[q].MZ()
+    return sequence
 
 
 @contextmanager
