@@ -33,7 +33,7 @@ from qibolab._core.execution_parameters import (
 )
 from qibolab._core.identifier import ChannelId, Result
 from qibolab._core.instruments.abstract import Controller
-from qibolab._core.pulses import PulseId
+from qibolab._core.pulses import Pulse, PulseId
 from qibolab._core.sequence import PulseSequence
 from qibolab._core.sweeper import ParallelSweepers
 
@@ -308,6 +308,13 @@ class ZiController(Controller):
 
     With ``False``, :meth:`disconnect` sets the offset of every DC channel to 0.
     """
+    reset_pulses: dict[ChannelId, tuple[ChannelId, Pulse]] = Field(default_factory=dict)
+    """Fast reset pulse of each acquisition channel, with the channel to play it on.
+
+    Usually the ``RX`` native on the qubit drive. With
+    :attr:`ExecutionParameters.fast_reset`, it is played after each acquisition of
+    the channel whose state is 1.
+    """
 
     _session: Session | None = None
 
@@ -381,6 +388,21 @@ class ZiController(Controller):
             pass
         self.session.run(self.session.compile(experiment))
 
+    def _check_fast_reset(
+        self, sequences: list[PulseSequence], options: ExecutionParameters
+    ) -> list[ChannelId]:
+        """Check that fast reset can run, and return the channels of its pulses."""
+        if options.acquisition_type is not AcquisitionType.DISCRIMINATION:
+            raise NotImplementedError(
+                "Fast reset needs DISCRIMINATION: its state decision uses the "
+                "threshold and the kernel of the discrimination."
+            )
+        acquired = {id for sequence in sequences for id, _ in sequence.acquisitions}
+        missing = acquired - self.reset_pulses.keys()
+        if missing:
+            raise ValueError(f"No fast reset pulse for {sorted(missing)}.")
+        return [self.reset_pulses[id][0] for id in acquired]
+
     def play(
         self,
         configs: dict[str, Config],
@@ -398,6 +420,10 @@ class ZiController(Controller):
         the ``threshold`` and ``iq_angle`` of the acquisition configs. Raw traces are
         demodulated at the configured probe frequency, and only one acquisition per
         call is taken: LabOne Q allows a single raw acquire in the averaging loop.
+
+        Fast reset needs discrimination: after each sequence, the pulse in
+        :attr:`reset_pulses` of each acquired channel is played if its state is 1
+        (LabOne Q ``match``, feedback through the PQSC or within an SHFQC).
         """
         acquisitions = [acq for sequence in sequences for acq in sequence.acquisitions]
         raw = options.acquisition_type is AcquisitionType.RAW
@@ -407,10 +433,8 @@ class ZiController(Controller):
                 f"{len(acquisitions)}: LabOne Q allows a single raw acquire in the "
                 "averaging loop."
             )
-        if options.fast_reset:
-            raise NotImplementedError("Fast reset is not supported.")
-
-        ids = signals(self.channels, sequences)
+        reset = self._check_fast_reset(sequences, options) if options.fast_reset else []
+        ids = sorted(set(signals(self.channels, sequences)) | set(reset))
         discriminate = options.acquisition_type is AcquisitionType.DISCRIMINATION
         calib = calibration(ids, self.channels, self.instruments, configs, discriminate)
         experiment = self._experiment(ids, calib)
@@ -443,6 +467,20 @@ class ZiController(Controller):
                         amplitudes,
                         options.acquisition_type,
                     )
+                for id, acquisition in sequence.acquisitions if reset else []:
+                    with experiment.match(handle=str(acquisition.id)):
+                        with experiment.case(state=0):
+                            pass
+                        with experiment.case(state=1):
+                            pulse.play(
+                                experiment,
+                                PulseSequence([self.reset_pulses[id]]),
+                                self.channels,
+                                configs,
+                                self.sampling_rate,
+                                {},
+                                options.acquisition_type,
+                            )
                 with experiment.section():
                     for id in ids:
                         experiment.delay(id, time=options.relaxation_time * pulse.NS)

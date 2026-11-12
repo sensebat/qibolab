@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("laboneq")
 
 from laboneq.core.exceptions import LabOneQException
-from laboneq.dsl.experiment import Acquire
+from laboneq.dsl.experiment import Acquire, Match
 from laboneq.simple import Experiment
 
 from qibolab._core.execution_parameters import (
@@ -19,6 +19,7 @@ from qibolab._core.execution_parameters import (
     ExecutionParameters,
 )
 from qibolab._core.instruments.zi import results
+from qibolab._core.pulses import Gaussian, Pulse
 from qibolab._core.sweeper import Parameter, Sweeper
 
 from ..test_calibration import channels, configs  # noqa: F401
@@ -215,3 +216,71 @@ def test_demodulated():
     assert baseband.shape == (1, samples, 2)
     np.testing.assert_allclose(baseband[..., 0], np.sqrt(2) * 1.0, atol=1e-9)
     np.testing.assert_allclose(baseband[..., 1], np.sqrt(2) * 0.5, atol=1e-9)
+
+
+def rx(qubit) -> tuple[str, Pulse]:
+    return (
+        f"q{qubit}/drive",
+        Pulse(duration=40, amplitude=0.5, envelope=Gaussian(rel_sigma=0.2)),
+    )
+
+
+def fast_reset(averaging_mode) -> ExecutionParameters:
+    return options(averaging_mode).model_copy(
+        update={
+            "acquisition_type": AcquisitionType.DISCRIMINATION,
+            "fast_reset": True,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "averaging_mode", [AveragingMode.CYCLIC, AveragingMode.SINGLESHOT]
+)
+def test_fast_reset(connected, configs, monkeypatch, averaging_mode):  # noqa: F811
+    """After each readout, the reset pulse is played on state 1, on its channel.
+
+    The sequences have no drive pulse, so the drive signals come from the resets.
+    """
+    connected.reset_pulses = {f"q{q}/acquisition": rx(q) for q in (0, 1)}
+    experiments = compiled(connected, monkeypatch)
+    sequences = [readouts([0, 1]), readouts([0])]
+    opts = fast_reset(averaging_mode)
+
+    results = connected.play(discriminating(configs), sequences, opts, [])
+
+    assert len(results) == 3
+    for result in results.values():
+        assert result.shape == opts.results_shape([])
+    (experiment,) = experiments
+    matches = list(operations(experiment, Match))
+    assert sorted(m.handle for m in matches) == sorted(
+        str(ro.id) for seq in sequences for _, ro in seq.acquisitions
+    )
+    for match in matches:
+        zero, one = match.children
+        assert (zero.state, one.state) == (0, 1)
+        assert zero.children == []
+        (play,) = one.children
+        assert play.signal in {"q0/drive", "q1/drive"}
+        assert play.amplitude == 0.5
+
+
+def test_fast_reset_needs_discrimination(connected, configs):  # noqa: F811
+    connected.reset_pulses = {"q0/acquisition": rx(0)}
+    opts = fast_reset(AveragingMode.CYCLIC).model_copy(
+        update={"acquisition_type": AcquisitionType.INTEGRATION}
+    )
+    with pytest.raises(NotImplementedError, match="DISCRIMINATION"):
+        connected.play(configs, [readouts([0])], opts, [])
+
+
+def test_fast_reset_needs_pulse(connected, configs):  # noqa: F811
+    connected.reset_pulses = {"q0/acquisition": rx(0)}
+    with pytest.raises(ValueError, match="q1/acquisition"):
+        connected.play(
+            discriminating(configs),
+            [readouts([0, 1])],
+            fast_reset(AveragingMode.CYCLIC),
+            [],
+        )
