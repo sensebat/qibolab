@@ -150,6 +150,23 @@ Implemented, but the values depend on hardware facts not checked:
 
 Not done in this round (not requested): F41 kernels, readout layout (G3/X03, F47, F25), G4 refusal.
 
+## Merged on orkun/proto-features
+
+Merge order sweeps, pulses, acquisition. Choices made at the merge (offline LabOne Q emulation only, laboneq 26.4.0 and 26.10.1):
+
+- Layout of proto-pulses with the `Swept` dict and the functional envelope of proto-sweeps. Pulses that are not probes play `ENVELOPE` with their length; chirped pulses play their samples and refuse a duration sweep.
+- Delays between readouts keep their ids, so a swept delay moves the readout after it. The 8 ns grid correction is taken from delays that are not swept; if there are none, the call is refused.
+- G6: durations that are not whole samples are refused, fixed and swept (proto-sweeps played them with the functional envelope).
+- Kernels: the config kernel is passed to LabOne Q as it is, times `-exp(1j * iq_angle)` to discriminate (threshold `-threshold`). Reason: `laboneq.analysis.calculate_integration_kernels` returns the conjugate of the state-trace difference to be used directly as kernel, and qibocal computes the qibolab kernel the same way from RAW traces. proto-pulses passed the conjugate; changed after the cross-check.
+- X06: frequency sweep on an acquisition channel raises `ValueError` naming the probe channel.
+- Fast reset plays the reset pulse directly in the `match` case.
+- `test_calibration.py::test_compile` and `test_controller.py::test_disconnect_zeroes_dc_offsets` read `recipe` (26.4.0) or `artifacts` (26.10.1), so all ZI tests pass on both versions.
+
+Cross-check with the conformance suite of `sensebat/qibolab@orkun/rc-tests`: see `sources/review/proto-crosscheck.md` in the QSolid hub. Still open:
+
+- F48 with RX lengths 40 and 48 ns: readouts on one QA line that overlap with different starts are refused (LabOne Q refuses them). qibocal rabi on uneven RX needs either that refusal or moving the earlier readout.
+- F45 fast reset: the conformance test calls it with INTEGRATION, no threshold and no reset pulse; the prototype needs DISCRIMINATION, a threshold and `ZiController.reset_pulses`. The qibolab `Controller.play` interface has no natives.
+
 ## Version notes
 
 - `pulse_library.sampled_pulse_complex` and `sampled_pulse_real` are gone in 26.10.1. Use `sampled_pulse` (both versions).
