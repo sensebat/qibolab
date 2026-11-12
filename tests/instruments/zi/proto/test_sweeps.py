@@ -10,11 +10,14 @@ import pytest
 
 pytest.importorskip("laboneq")
 
-from laboneq.simple import Experiment, ExperimentSignal, SweepParameter
+from laboneq.simple import Calibration, Experiment, ExperimentSignal, SweepParameter
 
 from qibolab._core.execution_parameters import AveragingMode
 from qibolab._core.instruments.zi import pulse as zipulse
 from qibolab._core.instruments.zi.controller import SAMPLING_RATE
+from qibolab._core.instruments.zi.sweep import split
+from qibolab._core.pulses import Delay, Gaussian, Pulse
+from qibolab._core.sequence import PulseSequence
 from qibolab._core.sweeper import Parameter, Sweeper
 
 from ..test_calibration import channels, configs  # noqa: F401
@@ -67,3 +70,62 @@ def test_probe_amplitude(connected, configs, averaging_mode):  # noqa: F811
         pulses=[ro.probe for _, ro in sequence.acquisitions],
     )
     run(connected, configs, sequence, [[amplitude]], averaging_mode)
+
+
+DURATIONS = np.array([40, 80, 120])
+
+
+@pytest.mark.parametrize(
+    "parameter", [Parameter.duration, Parameter.duration_interpolated]
+)
+def test_duration_lookup(channels, configs, parameter):  # noqa: F811
+    """F06, F07, F09: the swept length of a pulse and of its delay, in s."""
+    sequence = drives([0])
+    (_, drive), (_, delay) = list(sequence)[:2]
+    swept = {}
+    duration = Sweeper(parameter=parameter, values=DURATIONS, pulses=[drive, delay])
+    split([[duration]], channels, configs, Calibration(), swept)
+
+    ops = operations(sequence, channels, configs, swept)
+
+    played = swept[drive.id, Parameter.duration]
+    assert played.values == pytest.approx(DURATIONS * 1e-9)
+    assert ops["q0/drive"][0].length is played
+    # the delay on the acquisition channel also delays the probe
+    for signal in ("q0/acquisition", "q0/probe"):
+        assert ops[signal][0].time is swept[delay.id, Parameter.duration]
+
+
+@pytest.mark.parametrize("averaging_mode", AVERAGING)
+@pytest.mark.parametrize(
+    "parameter", [Parameter.duration, Parameter.duration_interpolated]
+)
+def test_rabi_length(connected, configs, averaging_mode, parameter):  # noqa: F811
+    """F06, F09: duration of the drive and of the delay before the readout."""
+    sequence = drives([0, 1])
+    duration = Sweeper(
+        parameter=parameter,
+        values=DURATIONS,
+        pulses=[op for _, op in list(sequence)[:4]],
+    )
+    run(connected, configs, sequence, [[duration]], averaging_mode)
+
+
+@pytest.mark.parametrize("averaging_mode", AVERAGING)
+def test_delay_duration(connected, configs, averaging_mode):  # noqa: F811
+    """F07, X23: T1, the delay between a pi pulse and the readout is swept."""
+    drive = Pulse(duration=40, amplitude=0.5, envelope=Gaussian(rel_sigma=0.2))
+    delay = Delay(duration=40)
+    sequence = PulseSequence(
+        [("q0/drive", drive), ("q0/acquisition", Delay(duration=40))]
+    )
+    sequence.append(("q0/acquisition", delay))
+    sequence |= readouts([0])
+    duration = Sweeper(parameter=Parameter.duration, values=DURATIONS, pulses=[delay])
+    run(connected, configs, sequence, [[duration]], averaging_mode)
+
+
+def test_fractional_duration(connected, configs):  # noqa: F811
+    """G6: a drive pulse of 41.3 ns compiles, with the delay that follows it."""
+    sequence = drives([0], duration=41.3)
+    run(connected, configs, sequence, [], AveragingMode.CYCLIC)

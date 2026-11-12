@@ -12,6 +12,11 @@ __all__ = []
 Swept = dict[tuple[PulseId | ChannelId, Parameter], SweepParameter]
 """Swept value of each pulse or channel, by its id and the swept parameter."""
 
+NS = 1e-9
+"""Qibolab times are in ns, LabOne Q ones in s."""
+
+_DURATIONS = {Parameter.duration, Parameter.duration_interpolated}
+
 Axes = list[int | None]
 """Qibolab sweeper of each axis of the LabOne Q results, ``None`` for the shots."""
 
@@ -32,7 +37,10 @@ def _group(
       modulated by the hardware (drive), in near time if by the software (probe),
       since an SHFQA generator cannot be swept in real time in integration mode;
     - amplitude of pulses: the parameter is recorded in ``swept``, to be used when
-      the pulse is played, and runs in near time.
+      the pulse is played, and runs in near time;
+    - duration of pulses and delays, also interpolated (both resample the envelope):
+      recorded in ``swept`` under :attr:`Parameter.duration`, in s, and run in real
+      time.
     """
     parameters = []
     real_time = set()
@@ -50,6 +58,12 @@ def _group(
                 swept[key] = SweepParameter(values=sweeper.values)
                 parameters.append(swept[key])
                 real_time.add(False)
+        elif sweeper.parameter in _DURATIONS:
+            for pulse in sweeper.pulses:
+                key = (pulse.id, Parameter.duration)
+                swept[key] = SweepParameter(values=sweeper.values * NS)
+                parameters.append(swept[key])
+                real_time.add(True)
         else:
             raise NotImplementedError(
                 f"Sweeping {sweeper.parameter.name} is not supported."

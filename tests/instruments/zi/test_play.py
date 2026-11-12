@@ -163,11 +163,6 @@ def test_unsupported(connected, configs):  # noqa: F811
     opts = options(AveragingMode.CYCLIC)
     drive = Pulse(duration=40, amplitude=0.5, envelope=Rectangular())
     sequence = PulseSequence([("q0/drive", drive)]) | sequence
-    duration = Sweeper(
-        parameter=Parameter.duration, values=np.array([40]), pulses=[drive]
-    )
-    with pytest.raises(NotImplementedError, match="duration"):
-        connected.play(configs, [sequence], opts, [[duration]])
     # the drive frequency is swept in real time, the probe one in near time
     parallel = frequencies(configs, ["q0/drive", "q0/probe"])
     with pytest.raises(NotImplementedError, match="real time"):
