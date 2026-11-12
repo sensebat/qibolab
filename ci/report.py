@@ -361,6 +361,9 @@ def main() -> int:
     args = parser.parse_args()
 
     rows = [read_row(f) for f in args.rows_dir.iterdir() if f.is_dir()]
+    if (args.rows_dir / "meta.json").exists():
+        # download-artifact unpacks a single artifact without its own folder.
+        rows.append(read_row(args.rows_dir))
     rows.sort(key=lambda r: (ROW_ORDER.index(r["name"]) if r["name"] in ROW_ORDER else 99, r["name"]))
     if not rows:
         print(f"no row folders in {args.rows_dir}")
