@@ -23,6 +23,11 @@ DRIVE_LO = 6.2e9
 PROBE_LO = 6.8e9
 
 
+def _recipe(scheduled):
+    """Device initializations: ``recipe`` in laboneq 26.4, ``artifacts`` in 26.10."""
+    return getattr(scheduled, "recipe", None) or scheduled.artifacts
+
+
 @pytest.fixture
 def channels(channels):
     """Channels with the LO names from :func:`infer_los`."""
@@ -159,7 +164,7 @@ def test_compile(controller, channels, configs):
 
     (hdawg,) = [
         init
-        for init in compiled.scheduled_experiment.recipe.initializations
+        for init in _recipe(compiled.scheduled_experiment).initializations
         if init.device_uid == "hdawg"
     ]
     assert {o.channel: o.offset for o in hdawg.outputs} == pytest.approx(

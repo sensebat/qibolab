@@ -14,6 +14,11 @@ from qibolab._core.instruments.zi.controller import PQSC_UID, device_setup
 from .conftest import INSTRUMENTS, NQUBITS, PQSC
 
 
+def _recipe(scheduled):
+    """Device initializations: ``recipe`` in laboneq 26.4, ``artifacts`` in 26.10."""
+    return getattr(scheduled, "recipe", None) or scheduled.artifacts
+
+
 def _connections(setup):
     """Map logical signal paths to ``(instrument, port)``."""
     return {
@@ -144,7 +149,7 @@ def test_disconnect_zeroes_dc_offsets(controller, monkeypatch):
     assert len(compiled) == 1
     (hdawg,) = [
         init
-        for init in compiled[0].scheduled_experiment.recipe.initializations
+        for init in _recipe(compiled[0].scheduled_experiment).initializations
         if init.device_uid == "hdawg"
     ]
     assert {o.channel: o.offset for o in hdawg.outputs} == dict.fromkeys(
