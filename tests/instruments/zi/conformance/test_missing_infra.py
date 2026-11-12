@@ -201,7 +201,9 @@ def test_probes_of_different_length_on_one_line(platform_uneven):
             id="uneven",
             marks=missing(
                 "readouts that start at different times in one sequence",
-                raises=LabOneQException,
+                raises=pytest.RaisesExc(
+                    LabOneQException, match="start at the same time"
+                ),
             ),
         ),
     ],
@@ -247,7 +249,9 @@ def test_readouts_at_different_times(request, fixture):
             id="two-lengths",
             marks=missing(
                 "two probe waveforms for one qubit in one call",
-                raises=LabOneQException,
+                raises=pytest.RaisesExc(
+                    LabOneQException, match="single pulse waveform"
+                ),
             ),
         ),
     ],
@@ -480,17 +484,26 @@ def _ports(setup, signal) -> tuple[set[str], set[str]]:
         pytest.param(
             _shfqc,
             id="SHFQC",
-            marks=missing("SHFQC instruments", raises=KeyError),
+            marks=missing(
+                "SHFQC instruments", raises=pytest.RaisesExc(KeyError, match="SHFQC")
+            ),
         ),
         pytest.param(
             _hdawg_iq_drive,
             id="HDAWG-IQ",
-            marks=missing("IQ channels on HDAWG outputs", raises=ValueError),
+            marks=missing(
+                "IQ channels on HDAWG outputs",
+                raises=pytest.RaisesExc(
+                    ValueError, match="cannot be connected to a HDAWG"
+                ),
+            ),
         ),
         pytest.param(
             _uhfqa_readout,
             id="UHFQA",
-            marks=missing("UHFQA instruments", raises=KeyError),
+            marks=missing(
+                "UHFQA instruments", raises=pytest.RaisesExc(KeyError, match="UHFQA")
+            ),
         ),
     ],
 )
@@ -536,7 +549,10 @@ def test_instrument_kinds(rack):
 @pytest.mark.feature("F53")
 @missing(
     "platform.execute with the default options (DISCRIMINATION, SINGLESHOT)",
-    raises=NotImplementedError,
+    raises=pytest.RaisesExc(
+        NotImplementedError,
+        match=re.escape("AcquisitionType.DISCRIMINATION is not supported."),
+    ),
 )
 def test_default_execute_options(platform):
     """``platform.execute`` with no options runs with the qibolab defaults:
@@ -569,7 +585,7 @@ def test_default_execute_options(platform):
 @pytest.mark.feature("F54")
 @missing(
     "parallel sweepers mixing near time and real time",
-    raises=NotImplementedError,
+    raises=pytest.RaisesExc(NotImplementedError, match="in parallel in near time"),
 )
 def test_parallel_drive_and_probe_frequency(platform):
     """One parallel group sweeps the drive frequency (real time) and the probe
