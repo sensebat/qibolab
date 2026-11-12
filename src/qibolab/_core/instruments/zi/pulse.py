@@ -76,7 +76,7 @@ def play(
                 length=swept.get((op.id, Parameter.duration), op.duration * NS),
                 pulse_parameters={"envelope": op.envelope.model_dump(mode="json")},
                 amplitude=swept.get((op.id, Parameter.amplitude), op.amplitude),
-                phase=op.relative_phase,
+                phase=swept.get((op.id, Parameter.relative_phase), op.relative_phase),
             )
         elif isinstance(op, Readout) and configs[id].kernel is None:
             experiment.play(

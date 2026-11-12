@@ -15,7 +15,13 @@ Swept = dict[tuple[PulseId | ChannelId, Parameter], SweepParameter]
 NS = 1e-9
 """Qibolab times are in ns, LabOne Q ones in s."""
 
-_DURATIONS = {Parameter.duration, Parameter.duration_interpolated}
+_PULSES = {
+    Parameter.amplitude: (Parameter.amplitude, 1.0, False),
+    Parameter.duration: (Parameter.duration, NS, True),
+    Parameter.duration_interpolated: (Parameter.duration, NS, True),
+    Parameter.relative_phase: (Parameter.relative_phase, 1.0, True),
+}
+"""Swept pulse parameters: key in :data:`Swept`, scale to LabOne Q, real time."""
 
 Axes = list[int | None]
 """Qibolab sweeper of each axis of the LabOne Q results, ``None`` for the shots."""
@@ -36,11 +42,10 @@ def _group(
       oscillator in ``calibration``. It runs in real time if the oscillator is
       modulated by the hardware (drive), in near time if by the software (probe),
       since an SHFQA generator cannot be swept in real time in integration mode;
-    - amplitude of pulses: the parameter is recorded in ``swept``, to be used when
-      the pulse is played, and runs in near time;
-    - duration of pulses and delays, also interpolated (both resample the envelope):
-      recorded in ``swept`` under :attr:`Parameter.duration`, in s, and run in real
-      time.
+    - parameters of pulses (:data:`_PULSES`): the parameter is recorded in
+      ``swept``, to be used when the pulse is played. Amplitude runs in near time;
+      duration (in s, also interpolated: both resample the envelope) and relative
+      phase run in real time.
     """
     parameters = []
     real_time = set()
@@ -52,18 +57,12 @@ def _group(
                 oscillator.frequency = SweepParameter(values=sweeper.values - lo)
                 parameters.append(oscillator.frequency)
                 real_time.add(oscillator.modulation_type is ModulationType.HARDWARE)
-        elif sweeper.parameter is Parameter.amplitude:
+        elif sweeper.parameter in _PULSES:
+            name, scale, rt = _PULSES[sweeper.parameter]
             for pulse in sweeper.pulses:
-                key = (pulse.id, sweeper.parameter)
-                swept[key] = SweepParameter(values=sweeper.values)
-                parameters.append(swept[key])
-                real_time.add(False)
-        elif sweeper.parameter in _DURATIONS:
-            for pulse in sweeper.pulses:
-                key = (pulse.id, Parameter.duration)
-                swept[key] = SweepParameter(values=sweeper.values * NS)
-                parameters.append(swept[key])
-                real_time.add(True)
+                swept[pulse.id, name] = SweepParameter(values=sweeper.values * scale)
+                parameters.append(swept[pulse.id, name])
+                real_time.add(rt)
         else:
             raise NotImplementedError(
                 f"Sweeping {sweeper.parameter.name} is not supported."

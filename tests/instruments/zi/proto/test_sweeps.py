@@ -129,3 +129,33 @@ def test_fractional_duration(connected, configs):  # noqa: F811
     """G6: a drive pulse of 41.3 ns compiles, with the delay that follows it."""
     sequence = drives([0], duration=41.3)
     run(connected, configs, sequence, [], AveragingMode.CYCLIC)
+
+
+PHASES = np.linspace(0, 2 * np.pi, 5)
+
+
+def test_relative_phase_lookup(channels, configs):  # noqa: F811
+    """F10: the swept phase of the drive pulse, in rad, in real time."""
+    sequence = drives([0])
+    drive = sequence[0][1]
+    swept = {}
+    phase = Sweeper(parameter=Parameter.relative_phase, values=PHASES, pulses=[drive])
+    _, real, _ = split([[phase]], channels, configs, Calibration(), swept)
+
+    ops = operations(sequence, channels, configs, swept)
+
+    assert real == [[swept[drive.id, Parameter.relative_phase]]]
+    assert ops["q0/drive"][0].phase is real[0][0]
+    assert real[0][0].values == pytest.approx(PHASES)
+
+
+@pytest.mark.parametrize("averaging_mode", AVERAGING)
+def test_relative_phase(connected, configs, averaging_mode):  # noqa: F811
+    """F10: relative phase of the drive pulses of two qubits."""
+    sequence = drives([0, 1])
+    phase = Sweeper(
+        parameter=Parameter.relative_phase,
+        values=PHASES,
+        pulses=[sequence[0][1], sequence[2][1]],
+    )
+    run(connected, configs, sequence, [[phase]], averaging_mode)
