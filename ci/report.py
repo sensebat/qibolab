@@ -144,11 +144,12 @@ def overview(rows: list[dict]) -> str:
             f"<tr><th><a href='#row-{esc(row['name'])}'>{esc(row['name'])}</a></th>"
             f"<td class={css}><b>{esc(text)}</b></td>"
             f"<td>{esc(result)}</td>"
+            f"<td class=mono>{esc(driver_text(meta))}</td>"
             f"<td class=mono>{esc(meta.get('laboneq') or '-')}</td>"
             f"<td class=mono>{esc(meta.get('zhinst_core') or '-')}</td></tr>"
         )
     return (
-        "<table><tr><th>Line</th><th>Result</th><th>Counts</th><th>laboneq</th>"
+        "<table><tr><th>Line</th><th>Result</th><th>Counts</th><th>Driver (repo@ref@sha)</th><th>laboneq</th>"
         f"<th>zhinst-core</th></tr>{''.join(body)}</table>"
     )
 
@@ -312,8 +313,9 @@ table.facts th{width:11em}.mono{overflow-wrap:anywhere}
 
 
 def page(rows: list[dict], run_url: str, when: str) -> str:
-    link = f' <a href="{esc(run_url)}">Workflow run</a>.' if run_url else ""
-    stamp = f" Built {esc(when)}." if when else ""
+    stamp = f"Generated {esc(when)}." if when else ""
+    link = f' Workflow run: <a href="{esc(run_url)}">{esc(run_url)}</a>.' if run_url else ""
+    top = f"<p class=mono>{stamp}{link}</p>" if stamp or link else ""
     sections = [
         "<h2>Overview</h2><div class=scroll>" + overview(rows) + "</div>",
         "<p class=muted>“Not implemented yet” means a strict expected failure: the driver "
@@ -329,10 +331,10 @@ def page(rows: list[dict], run_url: str, when: str) -> str:
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1">'
         f"<title>ZI driver tests</title><style>{CSS}</style></head><body><main>"
-        "<h1>ZI driver tests</h1>"
+        f"<h1>ZI driver tests</h1>{top}"
         "<p class=muted>The driver's own tests (tests/instruments/zi) and the conformance "
         "suite, run in LabOne Q emulation without hardware. Each line installs from its own "
-        f"uv.lock.{link}{stamp}</p>"
+        "uv.lock.</p>"
         f"{''.join(sections)}</main></body></html>"
     )
 
