@@ -1,13 +1,16 @@
-"""Build the zi-driver report (index.html) and state.json from the 2x2 cells.
+"""Build the zi-driver report (index.html) and state.json from the cells.
 
 Usage: python3 ci/report.py CELLS_DIR OUT_DIR [--summary MARKDOWN_FILE] [--when TEXT]
 
-CELLS_DIR holds one folder per cell (cell-r1-c1 ... cell-r2-c2) with meta.json and, when the
-tests ran, junit.xml (written by ci/run_cell.sh). OUT_DIR gets index.html and state.json.
-Run facts come from the environment (set by the workflow; the cells' meta.json fills gaps):
+CELLS_DIR holds one folder per cell (cell-r1-c1 ... cell-r2-c2, cell-x-c1, cell-x-c2 for an
+extra row) with meta.json and, when the tests ran, junit.xml (written by ci/run_cell.sh).
+OUT_DIR gets index.html and state.json. Run facts come from the environment (set by the
+workflow; the cells' meta.json fills gaps):
   KEY, RUN_URL, MATRIX, R1_SHA, R2_SHA, CI_SHA, LABONEQ_PINNED, LABONEQ_LATEST,
-  R1_REPO, R1_REF, R2_REPO, R2_REF, SUITE_REPO, SUITE_REF
---summary appends the 2x2 as a Markdown table (for $GITHUB_STEP_SUMMARY). Standard library only.
+  R1_REPO, R1_REF, R2_REPO, R2_REF, SUITE_REPO, SUITE_REF, EXTRA_REPO, EXTRA_REF, EXTRA_SHA
+Target cells (R1 x pinned, R2 x latest) must be green; state.json["targets"] holds their
+results for ci/gate.py. --summary appends the headline, the grid, the failed tests and the
+feature table as Markdown (for $GITHUB_STEP_SUMMARY). Standard library only.
 """
 
 import argparse
@@ -17,7 +20,10 @@ import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-ROWS = ["r1", "r2"]
+BASE_ROWS = ["r1", "r2"]
+EXTRA_ROW = "x"
+# Must be green: zi_drivers on the laboneq it pins, orkun/26.10 on the newest laboneq.
+TARGETS = ["r1-c1", "r2-c2"]
 COLS = ["c1", "c2"]
 OUTCOMES = ["passed", "xfailed", "skipped", "failed", "error"]
 CONFORMANCE = "conformance"
@@ -107,10 +113,28 @@ class Run:
         )
         self.r1_sha = e.get("R1_SHA") or r1_from_cells
         self.r2_sha = e.get("R2_SHA") or next((m["sha"] for m in metas if m.get("row") == "r2"), "")
+        extra = next((m for m in metas if m.get("row") == EXTRA_ROW), {})
+        self.extra_repo = e.get("EXTRA_REPO") or extra.get("repo", "")
+        self.extra_ref = e.get("EXTRA_REF") or extra.get("ref", "")
+        self.extra_sha = e.get("EXTRA_SHA") or extra.get("sha", "")
         if e.get("MATRIX"):
             self.planned = [c["cell"] for c in json.loads(e["MATRIX"])["include"]]
         else:
             self.planned = list(cells)
+        has_extra = bool(self.extra_ref) or any(c.startswith(EXTRA_ROW + "-") for c in self.planned)
+        self.rows = BASE_ROWS + ([EXTRA_ROW] if has_extra else [])
+        self.cell_ids = [f"{r}-{c}" for r in self.rows for c in COLS]
+
+    def targets(self) -> dict:
+        """Results of the target cells this run planned; ok when all are green."""
+        results = {cid: cell_state(self, cid)["result"] for cid in TARGETS if cid in self.planned}
+        green = sum(r == "green" for r in results.values())
+        headline = f"Targets: {green} of {len(results)} green"
+        red = [f"{label(cid)} {r}" for cid, r in results.items() if r != "green"]
+        if red:
+            headline += " (" + ", ".join(red) + ")"
+        return {"cells": results, "green": green, "total": len(results), "ok": green == len(results),
+                "headline": headline}
 
     def merge_note(self) -> str:
         return next(
@@ -136,10 +160,22 @@ def commit_link(repo: str, sha: str) -> str:
     return f'(<a href="https://github.com/{esc(repo)}/commit/{esc(sha)}">{esc(short(sha))}</a>)'
 
 
+def label(cell_id: str) -> str:
+    """r2-c2 -> R2 x latest."""
+    row, col = cell_id.split("-")
+    return f"{row.upper()} x {'pinned' if col == 'c1' else 'latest'}"
+
+
+def role(cell_id: str) -> str:
+    return "target" if cell_id in TARGETS else "information"
+
+
 def row_text(run: Run, row: str) -> str:
     r1 = f"{run.r1_repo}@{run.r1_ref} ({short(run.r1_sha)})"
     if row == "r1":
         return r1
+    if row == EXTRA_ROW:
+        return f"{run.extra_repo}@{run.extra_ref} ({short(run.extra_sha)}), extra row, no merge"
     return f"{run.r2_repo}@{run.r2_ref} ({short(run.r2_sha)}) + {r1} merged"
 
 
@@ -147,6 +183,11 @@ def row_html(run: Run, row: str) -> str:
     r1 = f"<span class=mono>{esc(run.r1_repo)}@{esc(run.r1_ref)}</span> {commit_link(run.r1_repo, run.r1_sha)}"
     if row == "r1":
         return r1
+    if row == EXTRA_ROW:
+        return (
+            f"<span class=mono>{esc(run.extra_repo)}@{esc(run.extra_ref)}</span> "
+            f"{commit_link(run.extra_repo, run.extra_sha)}<div class=small>extra row, no merge</div>"
+        )
     note = run.merge_note()
     return (
         f"<span class=mono>{esc(run.r2_repo)}@{esc(run.r2_ref)}</span> {commit_link(run.r2_repo, run.r2_sha)}"
@@ -210,7 +251,7 @@ def grid(run: Run) -> str:
         for c in COLS
     )
     body = []
-    for row in ROWS:
+    for row in run.rows:
         tds = []
         for col in COLS:
             cell_id = f"{row}-{col}"
@@ -222,8 +263,10 @@ def grid(run: Run) -> str:
             files = ""
             if state.get("conflicts"):
                 files = "<div class='small mono'>" + "<br>".join(esc(f) for f in state["conflicts"]) + "</div>"
+            css = f"{CSS_CLASS[state['result']]} {'target' if cell_id in TARGETS else 'info'}"
             tds.append(
-                f"<td class={CSS_CLASS[state['result']]} data-label='{esc(col_title(run, col))}'>"
+                f"<td class='{css}' data-label='{esc(col_title(run, col))}'>"
+                f"<div class=role>{role(cell_id)}</div>"
                 f"<a href='#{cell_id}'><b>{esc(state['text'])}</b></a>{files}"
                 + (f"<div class='small mono'>{esc(detail)}</div>" if detail else "")
                 + "</td>"
@@ -232,15 +275,13 @@ def grid(run: Run) -> str:
     return f"<table class=grid><thead><tr><th></th>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
 
 
-CELL_IDS = [f"{r}-{c}" for r in ROWS for c in COLS]
-
-
 def cell_head(run: Run, cell_id: str) -> str:
     row, col = cell_id.split("-")
     which = "pinned" if col == "c1" else "latest"
+    mark = " · target" if cell_id in TARGETS else ""
     return (
-        f"<th scope=col class=cellhead>{row.upper()} · {which}"
-        f"<div class='small mono'>{esc(col_version(run, col) or '-')}</div></th>"
+        f"<th scope=col class='cellhead{' target' if mark else ''}'>{row.upper()} · {which}"
+        f"<div class='small mono'>{esc(col_version(run, col) or '-')}{mark}</div></th>"
     )
 
 
@@ -349,7 +390,7 @@ def what_ran(run: Run) -> str:
     body = []
     for key, title, what in groups:
         tds = []
-        for cid in CELL_IDS:
+        for cid in run.cell_ids:
             cases = ran(run, cid)
             if cases is None:
                 tds.append("<td class=muted>-</td>")
@@ -362,7 +403,7 @@ def what_ran(run: Run) -> str:
             else:
                 tds.append(f"<td>{counts_line(of_kind)}</td>")
         body.append(f"<tr><th scope=row>{esc(title)}<div class='small muted'>{esc(what)}</div></th>{''.join(tds)}</tr>")
-    head = "".join(cell_head(run, cid) for cid in CELL_IDS)
+    head = "".join(cell_head(run, cid) for cid in run.cell_ids)
     return (
         "<h2>What ran</h2><div class=scroll><table class=counts>"
         f"<thead><tr><th></th>{head}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
@@ -384,8 +425,8 @@ def id_rank(feature_id: str) -> tuple[int, str]:
 def collect_features(run: Run) -> tuple[dict[str, dict], dict[str, dict[str, list]]]:
     """Feature infos by id, and per cell the conformance cases of each feature."""
     features: dict[str, dict] = {}
-    per_cell: dict[str, dict[str, list]] = {cid: {} for cid in CELL_IDS}
-    for cid in CELL_IDS:
+    per_cell: dict[str, dict[str, list]] = {cid: {} for cid in run.cell_ids}
+    for cid in run.cell_ids:
         for case in ran(run, cid) or []:
             props = case["props"]
             if not case["conformance"] or not props.get("feature"):
@@ -413,12 +454,12 @@ def effect_checks(run: Run) -> str:
     if not features:
         return "<h2>Effect checks</h2><p class=muted>No conformance results.</p>"
     order = sorted(features, key=lambda f: (checkpoint_rank(features[f]["cp"]), id_rank(f)))
-    green = {cid: 0 for cid in CELL_IDS}
+    green = {cid: 0 for cid in run.cell_ids}
     body, last_cp = [], None
     for fid in order:
         info = features[fid]
         tds = []
-        for cid in CELL_IDS:
+        for cid in run.cell_ids:
             if ran(run, cid) is None:
                 tds.append("<td class=muted>-</td>")
                 continue
@@ -440,9 +481,9 @@ def effect_checks(run: Run) -> str:
     with_effects = sum(1 for f in features.values() if f["effects"])
     foot = "".join(
         f"<td>{green[cid]} of {with_effects}</td>" if ran(run, cid) is not None else "<td class=muted>-</td>"
-        for cid in CELL_IDS
+        for cid in run.cell_ids
     )
-    head = "".join(cell_head(run, cid) for cid in CELL_IDS)
+    head = "".join(cell_head(run, cid) for cid in run.cell_ids)
     intro = (
         f"<p class=muted>One row per qibolab feature that qibocal needs, ordered by the first checkpoint "
         f"that needs it ({len(features)} features, {with_effects} with effect tests). "
@@ -493,12 +534,12 @@ def reference_chip(cases: list[dict]) -> str:
 
 def references(run: Run) -> str:
     cps: dict[str, dict] = {}
-    for cid in CELL_IDS:
+    for cid in run.cell_ids:
         for case in ran(run, cid) or []:
             cp = case["props"].get("checkpoint", "")
             if not case["conformance"] or case["props"].get("feature") or not cp.startswith("CP"):
                 continue
-            entry = cps.setdefault(cp, {"titles": [], "cells": {c: {"run": [], "ref": []} for c in CELL_IDS}})
+            entry = cps.setdefault(cp, {"titles": [], "cells": {c: {"run": [], "ref": []} for c in run.cell_ids}})
             if case["file"] == "test_references":
                 entry["cells"][cid]["ref"].append(case)
             else:
@@ -512,7 +553,7 @@ def references(run: Run) -> str:
     for cp in sorted(cps):
         entry = cps[cp]
         tds = []
-        for cid in CELL_IDS:
+        for cid in run.cell_ids:
             if ran(run, cid) is None:
                 tds.append("<td class=muted>-</td>")
                 continue
@@ -522,7 +563,7 @@ def references(run: Run) -> str:
         body.append(
             f"<tr><td class='mono id'>{esc(cp)}</td><td>{esc(', '.join(entry['titles']) or '-')}</td>{''.join(tds)}</tr>"
         )
-    head = "".join(cell_head(run, cid) for cid in CELL_IDS)
+    head = "".join(cell_head(run, cid) for cid in run.cell_ids)
     intro = (
         "<p class=muted>Each checkpoint runs the exact qibocal calls on the invented rack. "
         "<b>checkpoint</b>: the calls succeed and the results have the shapes qibocal reads. "
@@ -551,11 +592,11 @@ def failed_section(run: Run) -> str:
             "A planted-bug run fails when the bug went unnoticed.</p>"
         )
     ]
-    for row in ROWS:
+    for row in run.rows:
         for col in COLS:
             cell_id = f"{row}-{col}"
             state = cell_state(run, cell_id)
-            title = f"{row.upper()} × {col_title(run, col)}"
+            title = f"{row.upper()} × {col_title(run, col)} · {role(cell_id)}"
             version = col_version(run, col)
             head = (
                 f"<h3 id={cell_id}>{esc(title)}"
@@ -606,6 +647,12 @@ th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-ali
 .grid th[scope=row]{font-weight:400;width:34%}.grid td a{text-decoration:none}
 .good{background:var(--good);color:var(--good-fg)}.bad{background:var(--bad);color:var(--bad-fg)}
 .none{background:var(--none);color:var(--muted)}
+.grid td.info{background:var(--card);color:var(--fg);border-left:5px solid var(--line)}
+.grid td.info.good{border-left-color:var(--good-fg)}.grid td.info.bad{border-left-color:var(--bad-fg)}
+.grid td.info b{font-weight:500}.grid td.info .role{color:var(--muted)}
+.role{font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:2px}
+.headline{font-size:16px;font-weight:600;padding:8px 12px;border-radius:6px;margin:10px 0 8px}
+th.cellhead.target{font-weight:700}
 .pill{font-size:12px;font-weight:600;padding:1px 8px;border-radius:10px;vertical-align:middle}
 .scroll{overflow-x:auto;margin:8px 0;-webkit-overflow-scrolling:touch}
 ul.fails{padding-left:20px}ul.fails li{overflow-wrap:anywhere}
@@ -632,6 +679,18 @@ details summary{cursor:pointer;color:var(--muted);font-size:12.5px}details ul{ma
 """
 
 
+def headline(run: Run) -> str:
+    t = run.targets()
+    css = "good" if t["ok"] else "bad"
+    which = " and ".join(label(c) for c in TARGETS)
+    return (
+        f"<p class='headline {css}'>{esc(t['headline'])}</p>"
+        f"<p class=note>Targets: {esc(which)} must be green "
+        f"({esc(run.r1_ref)} on the laboneq it pins, {esc(run.r2_ref)} on the newest laboneq). "
+        "The other cells are information: what the code would hit on the other laboneq version.</p>"
+    )
+
+
 def page(run: Run) -> str:
     link = f'<a href="{esc(run.run_url)}">{esc(run.run_url.rsplit("/", 1)[-1])}</a>' if run.run_url else "local"
     note = (
@@ -652,7 +711,7 @@ def page(run: Run) -> str:
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1">'
         f"<title>ZI driver tests</title><style>{CSS}</style></head><body><main>"
-        f"<h1>ZI driver tests</h1>{nav}"
+        f"<h1>ZI driver tests</h1>{nav}{headline(run)}"
         f"<div class=scroll>{grid(run)}</div><p class=note>{note}</p><p class=note>{suite}</p>"
         f"{what_ran(run)}{effect_checks(run)}{references(run)}{failed_section(run)}"
         "</main></body></html>"
@@ -661,42 +720,104 @@ def page(run: Run) -> str:
 
 def state_json(run: Run) -> dict:
     cells = {}
-    for row in ROWS:
-        for col in COLS:
-            cid = f"{row}-{col}"
-            state = cell_state(run, cid)
-            meta = run.cells.get(cid, {}).get("meta", {})
-            state.pop("text", None)
-            state.update({k: meta[k] for k in ("laboneq", "zhinst_core", "sha", "merged_sha") if meta.get(k)})
-            cells[cid] = state
+    for cid in run.cell_ids:
+        state = cell_state(run, cid)
+        meta = run.cells.get(cid, {}).get("meta", {})
+        state.pop("text", None)
+        state["role"] = role(cid)
+        state.update({k: meta[k] for k in ("laboneq", "zhinst_core", "sha", "merged_sha") if meta.get(k)})
+        cells[cid] = state
     return {
         "key": run.key,
         "generated": run.when,
         "run": run.run_url,
-        "rows": {"r1": row_text(run, "r1"), "r2": row_text(run, "r2")},
+        "targets": run.targets(),
+        "rows": {r: row_text(run, r) for r in run.rows},
         "columns": {"c1": f"laboneq {run.pinned} (pinned)", "c2": f"laboneq {run.latest} (latest)"},
         "suite": f"{run.suite_repo}@{run.suite_ref} ({short(run.ci_sha)})",
         "cells": cells,
     }
 
 
-def summary_markdown(run: Run) -> str:
+def md(text: str) -> str:
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def summary_grid(run: Run) -> list[str]:
     lines = [
-        "### ZI driver tests",
-        "",
         f"| | {col_title(run, 'c1')}: {run.pinned} | {col_title(run, 'c2')}: {run.latest} |",
         "|---|---|---|",
     ]
-    for row in ROWS:
+    for row in run.rows:
         cells = []
         for col in COLS:
-            state = cell_state(run, f"{row}-{col}")
+            cid = f"{row}-{col}"
+            state = cell_state(run, cid)
             text = state["text"]
             if state.get("conflicts"):
                 text += ": " + ", ".join(f"`{f}`" for f in state["conflicts"])
-            cells.append(f"**{state['result']}**: {text}" if state["result"] in ("green", "red") else text)
+            mark = "**target**" if cid in TARGETS else "_information_"
+            cells.append(f"{mark} {state['result']}: {text}")
         lines.append(f"| **{row.upper()}** `{row_text(run, row)}` | {' | '.join(cells)} |")
-    lines += ["", "Report: artifact `test-report` (index.html); on orkun/ci also https://sensebat.github.io/qibolab/.", ""]
+    return lines
+
+
+def summary_failed(run: Run, limit: int = 40) -> list[str]:
+    lines = ["#### Failed tests", ""]
+    for cid in run.cell_ids:
+        cases = ran(run, cid)
+        if cases is None:
+            continue
+        bad = [c for c in cases if c["outcome"] in ("failed", "error")]
+        if not bad:
+            continue
+        lines.append(f"**{label(cid)}** ({role(cid)}): {len(bad)}")
+        lines.append("")
+        for c in bad[:limit]:
+            lines.append(f"- {kind(c)} `{c['file']}::{c['name']}`: {md(c['message'] or '(no message)')}")
+        if len(bad) > limit:
+            lines.append(f"- ... {len(bad) - limit} more in the test-report artifact")
+        lines.append("")
+    if len(lines) == 2:
+        lines += ["None.", ""]
+    return lines
+
+
+def summary_features(run: Run) -> list[str]:
+    features, per_cell = collect_features(run)
+    if not features:
+        return []
+    cids = [cid for cid in run.cell_ids if ran(run, cid) is not None]
+    lines = [
+        "#### Features (contract / effect)",
+        "",
+        "| Id | Feature | CP | " + " | ".join(label(c) for c in cids) + " |",
+        "|---|---|---|" + "---|" * len(cids),
+    ]
+    order = sorted(features, key=lambda f: (checkpoint_rank(features[f]["cp"]), id_rank(f)))
+    for fid in order:
+        info, tds = features[fid], []
+        for cid in cids:
+            cases = per_cell[cid].get(fid, [])
+            parts = []
+            for k in ("contract", "effect"):
+                group = [c for c in cases if kind(c) == k]
+                parts.append(tally(group)[1] if group else "-")
+            mutants = [c for c in cases if kind(c) == "planted bug"]
+            hit, total = caught(mutants)
+            if hit < total:
+                parts[1] += f" ({total - hit} bug{'s' if total - hit > 1 else ''} missed)"
+            tds.append(" / ".join(parts))
+        lines.append(f"| {fid} | {md(info['title'])} | {info['cp'] or '-'} | " + " | ".join(tds) + " |")
+    lines.append("")
+    return lines
+
+
+def summary_markdown(run: Run) -> str:
+    t = run.targets()
+    lines = ["### ZI driver tests", "", f"**{t['headline']}**", ""] + summary_grid(run) + [""]
+    lines += summary_failed(run) + summary_features(run)
+    lines += ["Report: artifact `test-report` (index.html); on orkun/ci also https://sensebat.github.io/qibolab/.", ""]
     return "\n".join(lines)
 
 
@@ -718,9 +839,9 @@ def main() -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "index.html").write_text(page(run))
     (args.out_dir / "state.json").write_text(json.dumps(state_json(run), indent=2) + "\n")
-    for row in ROWS:
-        for col in COLS:
-            print(f"{row.upper()} x {col_title(run, col)}: {cell_state(run, f'{row}-{col}')['text']}")
+    print(run.targets()["headline"])
+    for cid in run.cell_ids:
+        print(f"{label(cid)} ({role(cid)}): {cell_state(run, cid)['text']}")
     if args.summary:
         with args.summary.open("a") as f:
             f.write(summary_markdown(run))
