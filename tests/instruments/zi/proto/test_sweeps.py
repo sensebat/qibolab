@@ -275,3 +275,58 @@ def test_flux_duration(connected, configs, averaging_mode):  # noqa: F811
         pulses=[op for _, op in list(sequence)[:4]],
     )
     run(connected, configs, sequence, [[duration]], averaging_mode)
+
+
+def test_mixed_split(channels, configs):  # noqa: F811
+    """F13: a group with a real-time and a near-time sweep runs in near time."""
+    ids = ["q0/drive", "q0/probe", "q0/acquisition"]
+    calib = calibration(ids, channels, INSTRUMENTS, configs)
+    parallel = frequencies(configs, ["q0/drive", "q0/probe"])
+
+    near, real, axes = split([parallel], channels, configs, calib, {})
+
+    assert real == [] and axes == [0, None]
+    assert near[0] == [calib[id].oscillator.frequency for id in ids[:2]]
+
+
+def mixed(configs, sequence):  # noqa: F811
+    """Parallel groups, each with a real-time sweep next to a near-time one."""
+    pulses = [op for _, op in sequence]
+    drive, vz, delay = pulses[0], pulses[1], pulses[3]
+    probe = sequence.acquisitions[0][1]
+    n = 3
+    return [
+        frequencies(configs, ["q0/drive", "q0/probe"], points=n),
+        [
+            Sweeper(
+                parameter=Parameter.duration,
+                values=DURATIONS[:n],
+                pulses=[pulses[2], delay],
+            ),
+            Sweeper(
+                parameter=Parameter.amplitude,
+                values=0.1 * np.arange(1, n + 1),
+                pulses=[probe],
+            ),
+        ],
+        [
+            Sweeper(
+                parameter=Parameter.relative_phase, values=PHASES[:n], pulses=[drive]
+            ),
+            Sweeper(parameter=Parameter.phase, values=PHASES[:n], pulses=[vz]),
+            Sweeper(
+                parameter=Parameter.offset, values=OFFSETS[:n], channels=["q0/flux"]
+            ),
+        ],
+    ]
+
+
+@pytest.mark.parametrize("averaging_mode", AVERAGING)
+def test_mixed(connected, configs, averaging_mode):  # noqa: F811
+    """F13, G2, X20: every real-time parameter also runs in a near-time group.
+
+    Drive frequency, duration of a pulse and of a delay, relative phase and virtual Z
+    phase, each next to a near-time sweep (probe frequency, probe amplitude, offset).
+    """
+    sequence, _ = ramsey_vz([0])
+    run(connected, configs, sequence, mixed(configs, sequence), averaging_mode)

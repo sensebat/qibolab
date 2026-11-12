@@ -50,6 +50,8 @@ def _group(
       ``swept``, to be used when the pulse is played. Amplitude runs in near time;
       duration (in s, also interpolated: both resample the envelope), relative
       phase and the phase of a virtual Z run in real time.
+
+    A group that mixes near-time and real-time sweeps runs entirely in near time.
     """
     parameters = []
     real_time = set()
@@ -79,10 +81,6 @@ def _group(
             raise NotImplementedError(
                 f"Sweeping {sweeper.parameter.name} is not supported."
             )
-    if len(real_time) > 1:
-        raise NotImplementedError(
-            "Sweeping in parallel in near time and in real time is not supported."
-        )
     return parameters, real_time == {True}
 
 
