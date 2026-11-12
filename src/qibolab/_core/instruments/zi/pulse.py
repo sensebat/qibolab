@@ -5,7 +5,7 @@ from functools import cache
 from laboneq.simple import Experiment, pulse_library
 from pydantic import TypeAdapter
 
-from qibolab._core.components import Channel, Config, IqChannel
+from qibolab._core.components import Channel, Config, DcChannel, IqChannel
 from qibolab._core.identifier import ChannelId
 from qibolab._core.pulses import (
     Delay,
@@ -76,7 +76,7 @@ def play(
             time = swept.get((op.id, Parameter.duration), op.duration * NS)
             for signal in {id, probe} - {None}:
                 experiment.delay(signal, time=time)
-        elif isinstance(op, Pulse) and isinstance(channel, IqChannel):
+        elif isinstance(op, Pulse) and isinstance(channel, (IqChannel, DcChannel)):
             experiment.play(
                 id,
                 pulse=ENVELOPE,

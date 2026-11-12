@@ -16,7 +16,7 @@ from qibolab._core.execution_parameters import AveragingMode
 from qibolab._core.instruments.zi import pulse as zipulse
 from qibolab._core.instruments.zi.controller import SAMPLING_RATE, calibration
 from qibolab._core.instruments.zi.sweep import split
-from qibolab._core.pulses import Delay, Gaussian, Pulse, VirtualZ
+from qibolab._core.pulses import Delay, Gaussian, Pulse, Rectangular, VirtualZ
 from qibolab._core.sequence import PulseSequence
 from qibolab._core.sweeper import Parameter, Sweeper
 
@@ -238,3 +238,40 @@ def test_offset(connected, configs, averaging_mode):  # noqa: F811
     )
     probes = frequencies(configs, ["q0/probe", "q1/probe"], points=4)
     run(connected, configs, sequence, [[offset], probes], averaging_mode)
+
+
+def flux_pulses(qubits) -> PulseSequence:
+    """Flux pulse on each qubit, then a delayed readout."""
+    sequence = PulseSequence()
+    for q in qubits:
+        flux = Pulse(duration=40, amplitude=0.3, envelope=Rectangular())
+        sequence.extend(
+            [(f"q{q}/flux", flux), (f"q{q}/acquisition", Delay(duration=40))]
+        )
+    return sequence | readouts(qubits)
+
+
+def test_flux_duration_lookup(channels, configs):  # noqa: F811
+    """F08: the swept length of a flux pulse, on the HDAWG signal."""
+    sequence = flux_pulses([0])
+    flux = sequence[0][1]
+    swept = {}
+    duration = Sweeper(parameter=Parameter.duration, values=DURATIONS, pulses=[flux])
+    split([[duration]], channels, configs, Calibration(), swept)
+
+    ops = operations(sequence, channels, configs, swept)
+
+    assert ops["q0/flux"][0].length is swept[flux.id, Parameter.duration]
+    assert ops["q0/flux"][0].amplitude == 0.3
+
+
+@pytest.mark.parametrize("averaging_mode", AVERAGING)
+def test_flux_duration(connected, configs, averaging_mode):  # noqa: F811
+    """F08: duration of the flux pulses of two qubits and of the readout delays."""
+    sequence = flux_pulses([0, 1])
+    duration = Sweeper(
+        parameter=Parameter.duration,
+        values=DURATIONS,
+        pulses=[op for _, op in list(sequence)[:4]],
+    )
+    run(connected, configs, sequence, [[duration]], averaging_mode)
