@@ -2,7 +2,7 @@
 
 from laboneq.simple import Calibration, ModulationType, SweepParameter
 
-from qibolab._core.components import Channel, Config
+from qibolab._core.components import Channel, Config, DcChannel
 from qibolab._core.identifier import ChannelId
 from qibolab._core.pulses import PulseId
 from qibolab._core.sweeper import ParallelSweepers, Parameter
@@ -43,6 +43,9 @@ def _group(
       oscillator in ``calibration``. It runs in real time if the oscillator is
       modulated by the hardware (drive), in near time if by the software (probe),
       since an SHFQA generator cannot be swept in real time in integration mode;
+    - offset of a DC channel: the parameter replaces the ``voltage_offset`` in
+      ``calibration``, with absolute values, and runs in near time (it is a node
+      setting);
     - parameters of pulses (:data:`_PULSES`): the parameter is recorded in
       ``swept``, to be used when the pulse is played. Amplitude runs in near time;
       duration (in s, also interpolated: both resample the envelope), relative
@@ -58,6 +61,14 @@ def _group(
                 oscillator.frequency = SweepParameter(values=sweeper.values - lo)
                 parameters.append(oscillator.frequency)
                 real_time.add(oscillator.modulation_type is ModulationType.HARDWARE)
+        elif sweeper.parameter is Parameter.offset:
+            for id in sweeper.channels:
+                if not isinstance(channels[id], DcChannel):
+                    raise TypeError(f"Cannot sweep the offset of '{id}', not DC.")
+                calib = calibration[id]
+                calib.voltage_offset = SweepParameter(values=sweeper.values)
+                parameters.append(calib.voltage_offset)
+                real_time.add(False)
         elif sweeper.parameter in _PULSES:
             name, scale, rt = _PULSES[sweeper.parameter]
             for pulse in sweeper.pulses:

@@ -14,14 +14,15 @@ from laboneq.simple import Calibration, Experiment, ExperimentSignal, SweepParam
 
 from qibolab._core.execution_parameters import AveragingMode
 from qibolab._core.instruments.zi import pulse as zipulse
-from qibolab._core.instruments.zi.controller import SAMPLING_RATE
+from qibolab._core.instruments.zi.controller import SAMPLING_RATE, calibration
 from qibolab._core.instruments.zi.sweep import split
 from qibolab._core.pulses import Delay, Gaussian, Pulse, VirtualZ
 from qibolab._core.sequence import PulseSequence
 from qibolab._core.sweeper import Parameter, Sweeper
 
+from ..conftest import INSTRUMENTS
 from ..test_calibration import channels, configs  # noqa: F401
-from ..test_play import connected, drives, options, readouts  # noqa: F401
+from ..test_play import connected, drives, frequencies, options, readouts  # noqa: F401
 
 AVERAGING = [AveragingMode.CYCLIC, AveragingMode.SINGLESHOT]
 
@@ -205,3 +206,35 @@ def test_virtual_z_phase(connected, configs, averaging_mode):  # noqa: F811
     sequence, vzs = ramsey_vz([0, 1])
     phase = Sweeper(parameter=Parameter.phase, values=PHASES, pulses=vzs)
     run(connected, configs, sequence, [[phase]], averaging_mode)
+
+
+OFFSETS = np.array([-0.2, 0.0, 0.2])
+
+
+def test_offset_split(channels, configs):  # noqa: F811
+    """F12: the offset of a flux channel is swept in near time, absolute values."""
+    ids = ["q0/flux", "q1/flux"]
+    calib = calibration(ids, channels, INSTRUMENTS, configs)
+    offset = Sweeper(parameter=Parameter.offset, values=OFFSETS, channels=ids)
+
+    near, real, axes = split([[offset]], channels, configs, calib, {})
+
+    assert real == [] and axes == [0, None]
+    assert [calib[id].voltage_offset for id in ids] == near[0]
+    assert near[0][0].values == pytest.approx(OFFSETS)
+    with pytest.raises(TypeError, match="q0/drive"):
+        offset = Sweeper(
+            parameter=Parameter.offset, values=OFFSETS, channels=["q0/drive"]
+        )
+        split([[offset]], channels, configs, calib, {})
+
+
+@pytest.mark.parametrize("averaging_mode", AVERAGING)
+def test_offset(connected, configs, averaging_mode):  # noqa: F811
+    """F12: flux offset of two qubits, as a flux spectroscopy, with the probe frequency."""
+    sequence = readouts([0, 1])
+    offset = Sweeper(
+        parameter=Parameter.offset, values=OFFSETS, channels=["q0/flux", "q1/flux"]
+    )
+    probes = frequencies(configs, ["q0/probe", "q1/probe"], points=4)
+    run(connected, configs, sequence, [[offset], probes], averaging_mode)
