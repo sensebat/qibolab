@@ -88,11 +88,14 @@ def test_flux(channels, configs):
     assert calib.range == 5
 
 
-def test_flux_filters_unsupported(channels, configs):
+def test_flux_filters(channels, configs):
+    """Filters become the HDAWG precompensation (refused before orkun/proto-pulses)."""
     filters = [ExponentialFilter(amplitude=-0.1, tau=40)]
     configs["q0/flux"] = configs["q0/flux"].model_copy(update={"filters": filters})
-    with pytest.raises(NotImplementedError):
-        calibration(["q0/flux"], channels, INSTRUMENTS, configs)
+    calib = calibration(["q0/flux"], channels, INSTRUMENTS, configs)
+    (exponential,) = calib["q0/flux"].precompensation.exponential
+    assert exponential.timeconstant == pytest.approx(20e-9)
+    assert exponential.amplitude == pytest.approx(-0.1)
 
 
 @pytest.mark.parametrize("id", ["q0/drive", "q0/probe"])

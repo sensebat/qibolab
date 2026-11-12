@@ -11,13 +11,18 @@ pytest.importorskip("laboneq")
 
 from laboneq.simulator.output_simulator import OutputSimulator
 
-from qibolab._core.components import DcChannel
+from qibolab._core.components import (
+    DcChannel,
+    ExponentialFilter,
+    FiniteImpulseResponseFilter,
+)
 from qibolab._core.execution_parameters import (
     AcquisitionType,
     AveragingMode,
     ExecutionParameters,
 )
 from qibolab._core.instruments.zi import ZiDcConfig
+from qibolab._core.instruments.zi.controller import precompensation
 from qibolab._core.pulses import (
     Custom,
     Delay,
@@ -242,3 +247,44 @@ def test_chirp_refused(connected, configs):  # noqa: F811
     flux = pulse.model_copy(update={"chirp": (1, "Hz/nsec")})
     with pytest.raises(ValueError, match="chirp"):
         run(connected, configs, [PulseSequence([("q0/flux", flux)])])
+
+
+def test_precompensation():
+    """Exponential filters keep their order, FIR filters are convolved into one."""
+    filters = [
+        ExponentialFilter(amplitude=-0.1, tau=40),
+        FiniteImpulseResponseFilter(coefficients=[1.0, 0.5]),
+        ExponentialFilter(amplitude=0.2, tau=2000),
+        FiniteImpulseResponseFilter(coefficients=[1.0, -0.25]),
+    ]
+    comp = precompensation(filters, sampling_rate=2.0)
+    assert [e.timeconstant for e in comp.exponential] == pytest.approx([20e-9, 1e-6])
+    assert [e.amplitude for e in comp.exponential] == pytest.approx([-0.1, 0.2])
+    assert comp.FIR.coefficients == pytest.approx([1.0, 0.25, -0.125])
+    assert precompensation([], sampling_rate=2.0) is None
+
+
+def test_flux_filters_compile(connected, compiled, configs):  # noqa: F811
+    """The precompensation compiles and runs with the HDAWG ``PC`` option."""
+    filters = [
+        ExponentialFilter(amplitude=-0.1, tau=40),
+        FiniteImpulseResponseFilter(coefficients=[1.0, 0.1]),
+    ]
+    configs["q0/flux"] = configs["q0/flux"].model_copy(update={"filters": filters})
+    flux = Pulse(duration=100, amplitude=0.4, envelope=Rectangular())
+    run(connected, configs, [PulseSequence([("q0/flux", flux), readout()])])
+
+
+@pytest.mark.parametrize(
+    ("filters", "limit"),
+    [
+        ([ExponentialFilter(amplitude=-0.1, tau=40)] * 9, "8 exponential"),
+        ([FiniteImpulseResponseFilter(coefficients=[0.1] * 41)], "40 coefficients"),
+    ],
+)
+def test_flux_filters_limits(connected, configs, filters, limit):  # noqa: F811
+    """LabOne Q refuses more than the HDAWG holds."""
+    configs["q0/flux"] = configs["q0/flux"].model_copy(update={"filters": filters})
+    flux = Pulse(duration=100, amplitude=0.4, envelope=Rectangular())
+    with pytest.raises(Exception, match=limit):
+        run(connected, configs, [PulseSequence([("q0/flux", flux), readout()])])
