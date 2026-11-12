@@ -64,6 +64,10 @@ print(json.dumps({"include": cells}))
 EOF
 )
 
+echo "key:           $key"
+echo "published key: ${published:-none}"
+echo "event $EVENT, only_if_changed ${ONLY_IF_CHANGED:-false} -> run=$run, rows: $rows"
+
 {
   echo "run=$run"
   echo "key=$key"
