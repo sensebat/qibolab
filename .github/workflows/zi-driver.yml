@@ -1,10 +1,13 @@
 # Offline tests of the Zurich Instruments driver: LabOne Q emulation only, no hardware.
 #
-# Three rows, same tests (tests/instruments/zi of the driver + the conformance suite of
-# orkun/ci), each installed from its own uv.lock:
-#   pinned       upstream ElStabilini/qibolab@zi_drivers (laboneq 26.4). Must be green.
-#   26.10        this fork's orkun/26.10 (laboneq 26.10).
-#   merge-trial  upstream zi_drivers merged into orkun/26.10. Informational.
+# Same tests in every row (tests/instruments/zi of the driver + the conformance suite of
+# orkun/ci), each row installed from its own uv.lock. Runs on orkun/ci have two rows:
+#   today    "zi_drivers on 26.4 (rack today)": upstream ElStabilini/qibolab@zi_drivers,
+#            laboneq 26.4. Must be green.
+#   upgrade  "zi_drivers on 26.10 (after upgrade)": upstream zi_drivers merged into
+#            orkun/26.10, laboneq 26.10. Informational; a merge conflict is reported.
+# A push to orkun/26.10 has one row:
+#   branch   "orkun/26.10 branch": that commit alone, laboneq 26.10.
 # A last job builds one HTML report (artifact "test-report"); on orkun/ci the "pages" job
 # publishes it at https://sensebat.github.io/qibolab/.
 name: zi-driver
@@ -28,29 +31,30 @@ env:
 
 jobs:
   test:
-    name: ${{ matrix.row }}
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: ${{ matrix.row == 'merge-trial' }}
+    continue-on-error: ${{ matrix.row == 'upgrade' }}
     strategy:
       fail-fast: false
       matrix:
-        # A push to orkun/26.10 tests only that commit.
-        row: ${{ fromJSON(github.event_name == 'push' && github.ref_name == 'orkun/26.10' && '["26.10"]' || '["pinned", "26.10", "merge-trial"]') }}
+        # A push to orkun/26.10 tests only that commit; every other run tests the two rows.
+        include: ${{ fromJSON(github.event_name == 'push' && github.ref_name == 'orkun/26.10' && '[{"row":"branch","name":"orkun/26.10 branch"}]' || '[{"row":"today","name":"zi_drivers on 26.4 (rack today)"},{"row":"upgrade","name":"zi_drivers on 26.10 (after upgrade)"}]') }}
     steps:
       - name: Choose the driver for this row
         env:
           ROW: ${{ matrix.row }}
+          ROW_NAME: ${{ matrix.name }}
         run: |
           case "$ROW" in
-            pinned)
+            today)
               repo=$UPSTREAM_REPO; ref=$UPSTREAM_REF ;;
-            26.10)
+            branch)
               repo=$GITHUB_REPOSITORY; ref=$OURS_REF
               if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_NAME" = "$OURS_REF" ]; then
                 ref=$GITHUB_SHA
               fi ;;
-            merge-trial)
+            upgrade)
               repo=$GITHUB_REPOSITORY; ref=$OURS_REF
               echo "MERGE_URL=https://github.com/$UPSTREAM_REPO" >> "$GITHUB_ENV"
               echo "MERGE_REF=$UPSTREAM_REF" >> "$GITHUB_ENV" ;;
@@ -60,6 +64,7 @@ jobs:
           if [ "$GITHUB_REF_NAME" = "$SUITE_REF" ]; then suite=$GITHUB_SHA; fi
           {
             echo "ROW=$ROW"
+            echo "ROW_NAME=$ROW_NAME"
             echo "DRIVER_REPO=$repo"
             echo "DRIVER_REF=$ref"
             echo "SUITE=$suite"
@@ -72,7 +77,7 @@ jobs:
           ref: ${{ env.DRIVER_REF }}
           path: driver
           # The merge needs history.
-          fetch-depth: ${{ matrix.row == 'merge-trial' && '0' || '1' }}
+          fetch-depth: ${{ matrix.row == 'upgrade' && '0' || '1' }}
           persist-credentials: false
 
       - name: Check out the conformance suite and ci scripts (orkun/ci)

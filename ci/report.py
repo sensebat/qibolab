@@ -2,7 +2,7 @@
 
 Usage: python3 ci/report.py ROWS_DIR HTML_FILE [--summary MARKDOWN_FILE]
 
-ROWS_DIR holds one folder per row (pinned, 26.10, merge-trial), each with meta.json and,
+ROWS_DIR holds one folder per row (today, upgrade, or branch), each with meta.json and,
 when the tests ran, junit.xml. --summary appends one headline per row as a Markdown
 table (for $GITHUB_STEP_SUMMARY). Standard library only. Adapted from the summary.py of
 the earlier zi-driver-ci harness.
@@ -14,11 +14,23 @@ import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-ROW_ORDER = ["pinned", "26.10", "merge-trial"]
+ROW_ORDER = ["today", "upgrade", "branch"]
+ROW_TITLES = {
+    "today": "zi_drivers on 26.4 (rack today)",
+    "upgrade": "zi_drivers on 26.10 (after upgrade)",
+    "branch": "orkun/26.10 branch",
+}
+ROW_QUESTION = {
+    "today": "Does the driver work on the rack as it is today (LabOne Q 26.4)?",
+    "upgrade": "Does the newest driver work after the LabOne upgrade (LabOne Q 26.10)?",
+    "branch": "Does the orkun/26.10 branch alone work on LabOne Q 26.10?",
+}
 ROW_ABOUT = {
-    "pinned": "Upstream driver line, installed from its own uv.lock. Must be green.",
-    "26.10": "Our line on laboneq 26.10, installed from its own uv.lock.",
-    "merge-trial": "Upstream driver merged into the 26.10 line. Informational only.",
+    "today": "Upstream ElStabilini/qibolab@zi_drivers as it is, installed from its own uv.lock "
+    "(laboneq 26.4). Must be green.",
+    "upgrade": "Upstream zi_drivers merged into sensebat/qibolab@orkun/26.10 (the 26.10 changes), "
+    "installed from the merged uv.lock (laboneq 26.10). Informational.",
+    "branch": "sensebat/qibolab@orkun/26.10 alone, installed from its own uv.lock (laboneq 26.10).",
 }
 OUTCOMES = ["passed", "xfailed", "skipped", "failed", "error"]
 LABELS = {
@@ -72,10 +84,11 @@ def read_junit(path: Path) -> list[dict]:
 def read_row(folder: Path) -> dict:
     meta_file = folder / "meta.json"
     meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
-    name = meta.get("row") or folder.name.removeprefix("row-")
+    row_id = meta.get("row") or folder.name.removeprefix("row-")
+    name = meta.get("name") or ROW_TITLES.get(row_id, row_id)
     junit = folder / "junit.xml"
     cases = read_junit(junit) if junit.exists() else None
-    return {"name": name, "meta": meta, "cases": cases}
+    return {"id": row_id, "name": name, "meta": meta, "cases": cases}
 
 
 def counts(cases: list[dict]) -> dict[str, int]:
@@ -141,7 +154,7 @@ def overview(rows: list[dict]) -> str:
         css, text = verdict(row)
         result = count_text(counts(row["cases"])) if row["cases"] is not None else "no test results"
         body.append(
-            f"<tr><th><a href='#row-{esc(row['name'])}'>{esc(row['name'])}</a></th>"
+            f"<tr><th><a href='#row-{esc(row['id'])}'>{esc(row['name'])}</a></th>"
             f"<td class={css}><b>{esc(text)}</b></td>"
             f"<td>{esc(result)}</td>"
             f"<td class=mono>{esc(driver_text(meta))}</td>"
@@ -170,9 +183,10 @@ def row_section(row: dict) -> str:
         facts.insert(2, ("Merge", meta["merge_note"]))
     rows = "".join(f"<tr><th>{esc(k)}</th><td class=mono>{esc(v)}</td></tr>" for k, v in facts)
     parts = [
-        f"<h2 id='row-{esc(row['name'])}'>{esc(row['name'])} "
+        f"<h2 id='row-{esc(row['id'])}'>{esc(row['name'])} "
         f"<span class='pill {css}'>{esc(text)}</span></h2>",
-        f"<p class=muted>{esc(ROW_ABOUT.get(row['name'], ''))}</p>",
+        f"<p class=question>{esc(ROW_QUESTION.get(row['id'], ''))}</p>",
+        f"<p class=muted>{esc(ROW_ABOUT.get(row['id'], ''))}</p>",
         f"<div class=scroll><table class=facts>{rows}</table></div>",
     ]
     if cases is None:
@@ -308,7 +322,7 @@ table.facts th{width:11em}.mono{overflow-wrap:anywhere}
 .pill{font-size:13px;font-weight:600;padding:2px 8px;border-radius:10px;vertical-align:middle}
 .bad-text{color:var(--bad-fg)}ul.fails{padding-left:20px}ul.fails li{overflow-wrap:anywhere}
 .o-failed,.o-error{color:var(--bad-fg);font-weight:600}.o-xfailed,.o-skipped{color:var(--warn-fg)}
-.o-passed{color:var(--good-fg)}
+.o-passed{color:var(--good-fg)}.question{margin:0 0 4px;font-weight:500}
 """
 
 
@@ -345,6 +359,8 @@ def summary_markdown(rows: list[dict], run_url: str) -> str:
         meta = row["meta"]
         _, text = verdict(row)
         result = count_text(counts(row["cases"])) if row["cases"] is not None else "no test results"
+        if meta.get("conflicts"):
+            result = "merge conflict in " + ", ".join(f"`{f}`" for f in meta["conflicts"])
         lines.append(
             f"| {row['name']} | {text} | {result} | `{driver_text(meta)}` | "
             f"{meta.get('laboneq') or '-'} | {meta.get('zhinst_core') or '-'} |"
@@ -366,7 +382,7 @@ def main() -> int:
     if (args.rows_dir / "meta.json").exists():
         # download-artifact unpacks a single artifact without its own folder.
         rows.append(read_row(args.rows_dir))
-    rows.sort(key=lambda r: (ROW_ORDER.index(r["name"]) if r["name"] in ROW_ORDER else 99, r["name"]))
+    rows.sort(key=lambda r: (ROW_ORDER.index(r["id"]) if r["id"] in ROW_ORDER else 99, r["id"]))
     if not rows:
         print(f"no row folders in {args.rows_dir}")
         return 1
