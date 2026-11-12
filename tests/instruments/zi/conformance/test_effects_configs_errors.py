@@ -12,6 +12,13 @@ message is clear, the test matches it. Where it is not, the test asserts the mes
 a clear error would have and is a strict xfail that holds only while the call fails
 with the current exception type; it turns red once the message is fixed.
 
+Features the driver may refuse (acquisition types, averaging modes, fast reset,
+sweep parameters, kernels): the test passes if the call is refused with a
+``NotImplementedError`` that names the feature, or if it runs and has its effect
+(:func:`refused_or_works`). It never passes on a call that runs silently wrong, and
+it stays green the day the feature is implemented. The strict xfails that wait for
+the feature itself are elsewhere (test_conformance.py and the effect files).
+
 Every test that must pass carries ``@kills``: it also runs under planted driver bugs
 (:mod:`mutants`) and must fail under each of them.
 
@@ -24,10 +31,11 @@ sources/review/zi-driver-tests-inventory.md section 4.
 """
 
 import re
-from contextlib import contextmanager
 
+import laboneq.simple as lq
 import numpy as np
 import pytest
+from laboneq.dsl.experiment import Case, Match, PlayPulse, Section
 
 from qibolab._core.components import (
     AcquisitionConfig,
@@ -42,36 +50,12 @@ from qibolab._core.execution_parameters import (
 from qibolab._core.sweeper import Parameter, Sweeper
 
 from . import effects
+from .conftest import unclear
 from .effects import drives_then_mz, square
 from .mutants import kills
 from .test_conformance import mz, readout_of, updated
 
 # local helpers
-
-
-@contextmanager
-def raises(error, match):
-    """``pytest.raises``, with "did not raise" as an ``AssertionError``.
-
-    So that ``@kills`` counts a planted bug that removes a check as caught.
-    """
-    try:
-        with pytest.raises(error, match=match) as info:
-            yield info
-    except pytest.fail.Exception as failed:
-        raise AssertionError(str(failed)) from None
-
-
-def unclear(current: type, clear: str):
-    """Strict xfail while the call fails with ``current``, whatever its message.
-
-    ``clear`` says what a clear message would say.
-    """
-    return pytest.mark.xfail(
-        raises=pytest.RaisesExc(AssertionError, match=f"^{current.__name__}: "),
-        strict=True,
-        reason=f"unclear error message: {current.__name__} instead of {clear}",
-    )
 
 
 def expect_clear(call, kind, *patterns):
@@ -243,66 +227,152 @@ def test_acquisition_delay_delays_integration(platform):
     assert relative == pytest.approx(56)
 
 
-# errors: refusals with a clear message
+# errors: refused by name, or working
+
+
+def refused_or_works(call, names, works):
+    """``call`` is refused by name, or it runs and has its effect.
+
+    Refused: a ``NotImplementedError`` whose message matches one of ``names`` (a
+    message that does not name the feature is an ``AssertionError`` starting with
+    ``NotImplementedError:``). Runs: ``works`` is called with the :class:`Capture`
+    and must assert the effect. Never silently wrong; a test written this way stays
+    green the day the feature is implemented.
+    """
+    try:
+        cap = call()
+    except NotImplementedError as error:
+        message = f"NotImplementedError: {error}"
+        assert any(re.search(name, str(error)) for name in names), message
+        return
+    works(cap)
+
+
+def _shape(sweepers=(), **options):
+    """``results_shape`` of the call's execution parameters."""
+    parameters = ExecutionParameters(**(effects.DEFAULTS | options))
+    return parameters.results_shape(list(sweepers))
 
 
 @pytest.mark.parametrize(
-    "options, message",
+    "acquisition_type",
     [
         pytest.param(
-            {"acquisition_type": AcquisitionType.DISCRIMINATION},
-            "AcquisitionType.DISCRIMINATION is not supported.",
+            AcquisitionType.DISCRIMINATION,
             id="F17-discrimination",
             marks=pytest.mark.feature("F17"),
         ),
         pytest.param(
-            {"acquisition_type": AcquisitionType.RAW},
-            "AcquisitionType.RAW is not supported.",
+            AcquisitionType.RAW,
             id="F18-raw",
             marks=pytest.mark.feature("F18"),
         ),
     ],
 )
 @kills("acquisition_type_unchecked", "refusal_messages_vague")
-def test_unsupported_acquisition_type(platform, options, message):
-    """An acquisition type the driver does not implement is refused by name.
+def test_unsupported_acquisition_type(platform, acquisition_type):
+    """DISCRIMINATION and RAW are refused by name, or they reach LabOne Q.
 
-    Pattern: zhinst-qcodes 639ed104f4 and qblox-instruments 1.4.2 error tests.
+    Working: the acquisition loop has the LabOne Q acquisition type of the same
+    name, and each readout returns the qibolab shape (``()`` per point for
+    DISCRIMINATION, ``(samples, 2)`` for RAW).
+
+    Pattern: zhinst-qcodes 639ed104f4 and qblox-instruments 1.4.2 error tests;
+    zhinst/laboneq-applications v26.4.0 tests/helpers/dsl.py; qibolab
+    ``ExecutionParameters.results_shape`` (sources/research/driver-tests/README.md,
+    item 2).
     """
-    with raises(NotImplementedError, match=f"^{re.escape(message)}$"):
-        effects.play(platform, [mz(platform)], **options)
+    sequence = mz(platform)
+    name = acquisition_type.name
+
+    def works(cap):
+        assert cap.acquisition_type == getattr(lq.AcquisitionType, name)
+        result = cap.results[readout_of(sequence).id]
+        if acquisition_type is AcquisitionType.RAW:
+            assert result.ndim == 2 and result.shape[-1] == 2, result.shape
+        else:
+            assert result.shape == _shape(acquisition_type=acquisition_type)
+
+    refused_or_works(
+        lambda: effects.play(platform, [sequence], acquisition_type=acquisition_type),
+        [name],
+        works,
+    )
 
 
-@pytest.mark.parametrize(
-    "options, message",
-    [
-        pytest.param(
-            {"averaging_mode": AveragingMode.SEQUENTIAL},
-            "AveragingMode.SEQUENTIAL is not supported.",
-            id="F21-sequential",
-            marks=pytest.mark.feature("F21"),
-        ),
-    ],
-)
+@pytest.mark.feature("F21")
 @kills("averaging_mode_unchecked", "refusal_messages_vague")
-def test_unsupported_averaging_mode(platform, options, message):
-    """An averaging mode the driver does not implement is refused by name.
+def test_unsupported_averaging_mode(platform):
+    """SEQUENTIAL averaging is refused by name, or it reaches LabOne Q.
 
-    Pattern: zhinst-qcodes 639ed104f4 and qblox-instruments 1.4.2 error tests.
+    Working: the acquisition loop averages SEQUENTIAL and each readout returns the
+    qibolab shape.
+
+    Pattern: zhinst-qcodes 639ed104f4 and qblox-instruments 1.4.2 error tests;
+    zhinst/laboneq-applications v26.4.0 tests/helpers/dsl.py.
     """
-    with raises(NotImplementedError, match=f"^{re.escape(message)}$"):
-        effects.play(platform, [mz(platform)], **options)
+    sequence = mz(platform)
+    mode = AveragingMode.SEQUENTIAL
+
+    def works(cap):
+        assert cap.averaging_mode == lq.AveragingMode.SEQUENTIAL
+        result = cap.results[readout_of(sequence).id]
+        assert result.shape == _shape(averaging_mode=mode)
+
+    refused_or_works(
+        lambda: effects.play(platform, [sequence], averaging_mode=mode),
+        ["SEQUENTIAL"],
+        works,
+    )
+
+
+def _sections(node):
+    yield node
+    for child in getattr(node, "children", None) or []:
+        if isinstance(child, Section):
+            yield from _sections(child)
 
 
 @pytest.mark.feature("F45")
-@kills("refusal_messages_vague")
+@kills("fast_reset_ignored", "refusal_messages_vague")
 def test_fast_reset_refused(platform):
-    """``fast_reset`` is refused by name.
+    """``fast_reset`` is refused by name, or it plays a conditional reset.
 
-    Pattern: zhinst-qcodes 639ed104f4 and qblox-instruments 1.4.2 error tests.
+    Working: LabOne Q gets a ``match`` on the handle of the q0 readout, whose
+    ``case(state=1)`` plays on q0/drive (active reset).
+
+    Pattern: zhinst-qcodes 639ed104f4 and qblox-instruments 1.4.2 error tests;
+    LabOne Q DSL ``match(handle=...)``/``case(state=...)``, the construct of
+    zhinst/laboneq-applications v26.4.0 tunable_transmon ``active_reset``.
     """
-    with raises(NotImplementedError, match=r"^Fast reset is not supported\.$"):
-        effects.play(platform, [mz(platform)], fast_reset=True)
+    sequence = drives_then_mz(platform, {"q0": [square()]})
+
+    def works(cap):
+        handles = set(cap.handles("q0/acquisition"))
+        matches = [
+            node
+            for top in cap.experiment.sections
+            for node in _sections(top)
+            if isinstance(node, Match) and node.handle in handles
+        ]
+        assert matches, "no match on the q0 readout handle"
+        flips = [
+            child
+            for match in matches
+            for case in match.children
+            if isinstance(case, Case) and case.state == 1
+            for section in _sections(case)
+            for child in section.children
+            if isinstance(child, PlayPulse)
+            and cap.channel_of(child.signal) == "q0/drive"
+        ]
+        assert flips, "no play on q0/drive for state 1"
+
+    refused_or_works(
+        lambda: effects.play(platform, [sequence], fast_reset=True),
+        ["[Ff]ast reset", "fast_reset"],
+        works,
+    )
 
 
 def _drive_sweeper(platform, parameter):
@@ -316,6 +386,31 @@ def _offset_sweeper(platform, parameter):
     values = np.array([0.1, 0.2])
     sweeper = Sweeper(parameter=parameter, values=values, channels=["q0/flux"])
     return [mz(platform)], sweeper
+
+
+SWEPT = {
+    Parameter.duration: ("q0/drive", "length", 1e-9),
+    Parameter.relative_phase: ("q0/drive", "phase", 1.0),
+    Parameter.offset: ("q0/flux", "offset", 1.0),
+}
+"""Swept parameter: channel, LabOne Q quantity it drives, LabOne Q unit per qibolab
+unit."""
+
+
+def _swept_values(cap, channel, quantity):
+    """Values of ``quantity`` on ``channel`` driven by any LabOne Q sweep."""
+    found = []
+    for loop in cap.sweeps():
+        for parameter in loop.parameters:
+            for driven in cap.driven_by(parameter):
+                if driven.channel != channel or driven.quantity != quantity:
+                    continue
+                if driven.op is not None:
+                    x = getattr(driven.op.op, quantity)
+                else:
+                    x = cap.calibration(channel).voltage_offset
+                found.append(np.asarray(effects.values(x)))
+    return found
 
 
 @pytest.mark.parametrize(
@@ -341,16 +436,34 @@ def _offset_sweeper(platform, parameter):
         ),
     ],
 )
-@kills("refusal_messages_vague")
+@kills("unsupported_sweepers_dropped", "refusal_messages_vague")
 def test_unsupported_sweep_parameter(platform, build, parameter):
-    """A sweep of a parameter the driver does not implement is refused by name.
+    """A sweep of duration, relative phase or offset is refused by name, or swept.
 
-    Pattern: zhinst-qcodes 639ed104f4 and qblox-instruments 1.4.2 error tests.
+    Working: a LabOne Q sweep drives the pulse length or phase on q0/drive, or the
+    voltage offset of q0/flux, with the sweeper values (in LabOne Q units), and the
+    results have the sweep axis.
+
+    Pattern: zhinst-qcodes 639ed104f4 and qblox-instruments 1.4.2 error tests;
+    zhinst/laboneq-applications v26.4.0 tests/helpers/dsl.py.
     """
     sequences, sweeper = build(platform, parameter)
-    message = f"Sweeping {parameter.name} is not supported."
-    with raises(NotImplementedError, match=f"^{re.escape(message)}$"):
-        effects.play(platform, sequences, [[sweeper]])
+    channel, quantity, unit = SWEPT[parameter]
+
+    def works(cap):
+        found = _swept_values(cap, channel, quantity)
+        expected = sweeper.values * unit
+        assert any(
+            v.shape == expected.shape and np.allclose(v, expected) for v in found
+        ), f"{quantity} of {channel} swept over {found}, not {expected}"
+        result = cap.results[readout_of(sequences[0]).id]
+        assert result.shape == _shape([[sweeper]])
+
+    refused_or_works(
+        lambda: effects.play(platform, sequences, [[sweeper]]),
+        [parameter.name],
+        works,
+    )
 
 
 # errors: mistakes with an unclear message (strict xfail until fixed)
@@ -492,26 +605,40 @@ def test_play_before_connect(platform):
 
 
 @pytest.mark.feature("F41")
-@unclear(NotImplementedError, "a message naming the kernel")
+@kills(
+    "kernel_ignored",
+    "refusal_messages_vague",
+    driver_marks=unclear(NotImplementedError, "a message naming the kernel"),
+)
 def test_kernel_refused(platform):
-    """An integration kernel in the acquisition config.
+    """An integration kernel in the acquisition config is refused by name, or used.
 
+    Working: the q0 acquisition integrates with the kernel samples (up to a factor).
     Today: ``NotImplementedError: Readout on channel 'q0/acquisition' is not
     supported.``, which does not name the kernel.
 
     Pattern: zhinst-qcodes 639ed104f4 and qblox-instruments 1.4.2 error tests;
-    sources/research/driver-tests/README.md M6.
+    sources/research/driver-tests/README.md M6; zhinst/laboneq-applications v26.4.0
+    tests/helpers/dsl.py.
     """
     sequence = mz(platform)
     samples = int(readout_of(sequence).duration * platform.sampling_rate)
-    configs = updated(
-        platform, q0__acquisition={"kernel": np.ones(samples, dtype=complex)}
+    kernel = np.exp(1j * np.linspace(0, np.pi / 2, samples)) * np.linspace(
+        1, 2, samples
     )
+    configs = updated(platform, q0__acquisition={"kernel": kernel})
 
-    expect_clear(
+    def works(cap):
+        (acquire,) = cap.acquires("q0/acquisition")
+        weights = cap.samples(acquire)
+        assert weights.shape == kernel.shape, weights.shape
+        ratio = weights / kernel
+        assert np.allclose(ratio, ratio[0]), "integration weights are not the kernel"
+
+    refused_or_works(
         lambda: effects.play(platform, [sequence], configs=configs),
-        NotImplementedError,
-        "[Kk]ernel",
+        ["[Kk]ernel"],
+        works,
     )
 
 

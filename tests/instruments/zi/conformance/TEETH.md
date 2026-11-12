@@ -6,7 +6,7 @@ Caught by: `assertion` = at least one test fails on an assertion (or a strict xf
 
 ## Summary
 
-36 of 36 planted bugs turn at least one test red. No gaps.
+39 of 39 planted bugs turn at least one test red. No gaps.
 
 | planted bug | what it does | caught by | driver tests | contract tests | effect tests |
 |---|---|---|---|---|---|
@@ -16,9 +16,9 @@ Caught by: `assertion` = at least one test fails on an assertion (or a strict xf
 | `results_q_is_i` | results: Q is replaced by I | assertion | 0 | 0 | 14 |
 | `sweep_grid_reversed` | sweep values are reversed | assertion | 1 | 0 | 17 |
 | `pulse_on_wrong_channel` | pulses on a drive channel are played on the drive of another qubit | assertion | 0 | 0 | 5 |
-| `drive_signal_misrouted` | drive signals are mapped to the logical signal of the next qubit's drive | assertion | 0 | 0 | 23 |
+| `drive_signal_misrouted` | drive signals are mapped to the logical signal of the next qubit's drive | assertion | 2 | 0 | 23 |
 | `flux_signal_misrouted` | flux signals are mapped to the logical signal of the next qubit's flux | assertion | 0 | 0 | 2 |
-| `readout_probe_swapped` | the probe pulses of the first two readouts are swapped between qubits | assertion | 0 | 3 | 5 |
+| `readout_probe_swapped` | the probe pulses of the first two readouts are swapped between qubits | assertion | 2 | 3 | 5 |
 | `unused_dc_channels_dropped` | DC channels unused by the sequences are left out of the experiment | assertion | 0 | 1 | 9 |
 | `frequency_sweep_offset` | frequency sweep values are offset by one step | assertion | 1 | 0 | 12 |
 | `nested_sweepers_swapped` | nested sweepers are run in reverse order (grid transposed) | assertion | 2 | 2 | 4 |
@@ -31,18 +31,21 @@ Caught by: `assertion` = at least one test fails on an assertion (or a strict xf
 | `samples_q_is_i` | pulse samples: Q is replaced by I | assertion | 0 | 0 | 14 |
 | `samples_iq_swapped` | pulse samples: I and Q are swapped | assertion | 0 | 0 | 12 |
 | `probe_phase_dropped` | relative phase of probe pulses is dropped | assertion | 0 | 0 | 1 |
-| `sampling_rate_hdawg` | samples are computed at the HDAWG rate (2.4 GSa/s) on SHF instruments | assertion | 1 | 0 | 16 |
-| `delays_dropped` | delays of a sequence are not played | assertion | 0 | 0 | 6 |
-| `probe_delay_dropped` | a delay on an acquisition channel does not delay its probe channel | assertion | 0 | 3 | 5 |
+| `sampling_rate_hdawg` | samples are computed at the HDAWG rate (2.4 GSa/s) on SHF instruments | assertion | 3 | 0 | 16 |
+| `delays_dropped` | delays of a sequence are not played | assertion | 2 | 0 | 6 |
+| `probe_delay_dropped` | a delay on an acquisition channel does not delay its probe channel | assertion | 2 | 3 | 5 |
 | `align_ignored` | Align is ignored | assertion | 0 | 0 | 2 |
 | `sequences_reversed` | several sequences are played in reverse order | assertion | 0 | 0 | 3 |
-| `integration_length_from_probe` | the integration length is the probe duration, not the acquisition one | assertion | 0 | 0 | 1 |
+| `integration_length_from_probe` | the integration length is the probe duration, not the acquisition one | assertion | 1 | 0 | 1 |
 | `nshots_ignored` | nshots is ignored: 1000 shots always | assertion | 4 | 5 | 13 |
-| `averaging_mode_swapped` | CYCLIC and SINGLESHOT averaging are swapped | assertion | 5 | 26 | 13 |
+| `averaging_mode_swapped` | CYCLIC and SINGLESHOT averaging are swapped | assertion | 7 | 26 | 13 |
 | `acquisition_type_discrimination` | LabOne Q acquires in DISCRIMINATION mode instead of INTEGRATION | assertion | 0 | 0 | 7 |
-| `acquisition_type_unchecked` | any acquisition type runs as INTEGRATION | assertion | 1 | 1 | 1 |
+| `acquisition_type_unchecked` | any acquisition type runs as INTEGRATION | assertion | 2 | 1 | 1 |
 | `averaging_mode_unchecked` | any averaging mode runs as CYCLIC | assertion | 5 | 5 | 5 |
 | `refusal_messages_vague` | refusals do not say what is not supported | assertion | 1 | 16 | 4 |
+| `fast_reset_ignored` | fast_reset is accepted and ignored | assertion | 1 | 1 | 1 |
+| `unsupported_sweepers_dropped` | sweepers of parameters other than frequency and amplitude are dropped | assertion | 1 | 7 | 1 |
+| `kernel_ignored` | integration kernels in acquisition configs are ignored (unit weights) | assertion | 0 | 1 | 1 |
 | `results_axes_reshaped` | results are reshaped to the qibolab shape instead of moving the axes | assertion | 0 | 0 | 2 |
 | `results_axes_not_moved` | results keep the LabOne Q axis order (near time, shots, real time) | assertion | 2 | 1 | 2 |
 | `acquisition_handles_swapped` | acquisition handles are swapped between the first two readouts | assertion | 0 | 0 | 10 |
@@ -159,7 +162,9 @@ pulses on a drive channel are played on the drive of another qubit.
 
 drive signals are mapped to the logical signal of the next qubit's drive.
 
-- driver tests (tests/instruments/zi/test_*.py): none
+- driver tests (tests/instruments/zi/test_*.py):
+  - `test_missing_infra.py::test_chirp_reaches_waveform` (1 case; ValueError)
+  - `test_missing_infra.py::test_duration_off_sample_grid` (2 cases; ValueError)
 - contract tests (test_conformance.py, test_checkpoints.py): none
 - effect tests (test_effects_*.py, test_references.py):
   - `test_effects_acquisition.py::test_result_axes_follow_sweepers` (2 cases; Missing)
@@ -200,7 +205,9 @@ flux signals are mapped to the logical signal of the next qubit's flux.
 
 the probe pulses of the first two readouts are swapped between qubits.
 
-- driver tests (tests/instruments/zi/test_*.py): none
+- driver tests (tests/instruments/zi/test_*.py):
+  - `test_missing_infra.py::test_probes_of_different_length_on_one_line` (1 case; AssertionError)
+  - `test_missing_infra.py::test_readouts_at_different_times` (1 case; LabOneQException)
 - contract tests (test_conformance.py, test_checkpoints.py):
   - `test_checkpoints.py::test_qubit_spectroscopy` (1 case; LabOneQException)
   - `test_checkpoints.py::test_rabi_amplitude_signal` (2 cases; LabOneQException)
@@ -405,6 +412,8 @@ samples are computed at the HDAWG rate (2.4 GSa/s) on SHF instruments.
 
 - driver tests (tests/instruments/zi/test_*.py):
   - `test_controller.py::test_sampling_rate` (1 case; AssertionError)
+  - `test_missing_infra.py::test_probes_of_different_length_on_one_line` (1 case; AssertionError)
+  - `test_missing_infra.py::test_two_probe_lengths_one_qubit` (1 case; AssertionError)
 - contract tests (test_conformance.py, test_checkpoints.py): none
 - effect tests (test_effects_*.py, test_references.py):
   - `test_effects_acquisition.py::test_integration_length_is_acquisition_duration` (1 case; AssertionError)
@@ -428,7 +437,9 @@ samples are computed at the HDAWG rate (2.4 GSa/s) on SHF instruments.
 
 delays of a sequence are not played.
 
-- driver tests (tests/instruments/zi/test_*.py): none
+- driver tests (tests/instruments/zi/test_*.py):
+  - `test_missing_infra.py::test_duration_off_sample_grid` (1 case; AssertionError)
+  - `test_missing_infra.py::test_readouts_at_different_times` (2 cases; AssertionError)
 - contract tests (test_conformance.py, test_checkpoints.py): none
 - effect tests (test_effects_*.py, test_references.py):
   - `test_effects_pulses.py::test_align_synchronises_channels` (1 case; AssertionError)
@@ -442,7 +453,9 @@ delays of a sequence are not played.
 
 a delay on an acquisition channel does not delay its probe channel.
 
-- driver tests (tests/instruments/zi/test_*.py): none
+- driver tests (tests/instruments/zi/test_*.py):
+  - `test_missing_infra.py::test_duration_off_sample_grid` (1 case; AssertionError)
+  - `test_missing_infra.py::test_readouts_at_different_times` (1 case; AssertionError)
 - contract tests (test_conformance.py, test_checkpoints.py):
   - `test_checkpoints.py::test_single_shot_classification_and_dispersive_shift` (1 case; LabOneQException)
   - `test_conformance.py::test_several_sequences` (1 case; LabOneQException)
@@ -479,7 +492,8 @@ several sequences are played in reverse order.
 
 the integration length is the probe duration, not the acquisition one.
 
-- driver tests (tests/instruments/zi/test_*.py): none
+- driver tests (tests/instruments/zi/test_*.py):
+  - `test_missing_infra.py::test_probes_of_different_length_on_one_line` (1 case; AssertionError)
 - contract tests (test_conformance.py, test_checkpoints.py): none
 - effect tests (test_effects_*.py, test_references.py):
   - `test_effects_acquisition.py::test_integration_length_is_acquisition_duration` (1 case; AssertionError)
@@ -519,6 +533,8 @@ nshots is ignored: 1000 shots always.
 CYCLIC and SINGLESHOT averaging are swapped.
 
 - driver tests (tests/instruments/zi/test_*.py):
+  - `test_missing_infra.py::test_readouts_at_different_times` (1 case; AssertionError)
+  - `test_missing_infra.py::test_two_probe_lengths_one_qubit` (1 case; AssertionError)
   - `test_play.py::test_multiple_sequences` (2 cases; AssertionError)
   - `test_play.py::test_near_and_real_time_axes` (2 cases; AssertionError)
   - `test_play.py::test_qubit_spectroscopy` (2 cases; AssertionError)
@@ -586,6 +602,7 @@ LabOne Q acquires in DISCRIMINATION mode instead of INTEGRATION.
 any acquisition type runs as INTEGRATION.
 
 - driver tests (tests/instruments/zi/test_*.py):
+  - `test_missing_infra.py::test_default_execute_options` (1 case; AssertionError)
   - `test_play.py::test_unsupported` (1 case; TypeError)
 - contract tests (test_conformance.py, test_checkpoints.py):
   - `test_conformance.py::test_acquisition_type` (2 cases; AssertionError)
@@ -643,6 +660,44 @@ refusals do not say what is not supported.
   - `test_effects_configs_errors.py::test_unsupported_acquisition_type` (2 cases; AssertionError)
   - `test_effects_configs_errors.py::test_unsupported_averaging_mode` (1 case; AssertionError)
   - `test_effects_configs_errors.py::test_unsupported_sweep_parameter` (3 cases; AssertionError)
+
+### `fast_reset_ignored`
+
+fast_reset is accepted and ignored.
+
+- driver tests (tests/instruments/zi/test_*.py):
+  - `test_play.py::test_unsupported` (1 case; Failed)
+- contract tests (test_conformance.py, test_checkpoints.py):
+  - `test_conformance.py::test_fast_reset` (1 case; XPASS(strict))
+- effect tests (test_effects_*.py, test_references.py):
+  - `test_effects_configs_errors.py::test_fast_reset_refused` (1 case; AssertionError)
+
+### `unsupported_sweepers_dropped`
+
+sweepers of parameters other than frequency and amplitude are dropped.
+
+- driver tests (tests/instruments/zi/test_*.py):
+  - `test_play.py::test_unsupported` (1 case; Failed)
+- contract tests (test_conformance.py, test_checkpoints.py):
+  - `test_conformance.py::test_duration_interpolated_sweep` (1 case; AssertionError)
+  - `test_conformance.py::test_duration_sweep_delay` (1 case; AssertionError)
+  - `test_conformance.py::test_duration_sweep_drive` (1 case; AssertionError)
+  - `test_conformance.py::test_duration_sweep_flux` (1 case; NotImplementedError)
+  - `test_conformance.py::test_offset_sweep` (1 case; AssertionError)
+  - `test_conformance.py::test_relative_phase_sweep` (1 case; AssertionError)
+  - `test_conformance.py::test_virtual_z_phase_sweep` (1 case; NotImplementedError)
+- effect tests (test_effects_*.py, test_references.py):
+  - `test_effects_configs_errors.py::test_unsupported_sweep_parameter` (3 cases; AssertionError)
+
+### `kernel_ignored`
+
+integration kernels in acquisition configs are ignored (unit weights).
+
+- driver tests (tests/instruments/zi/test_*.py): none
+- contract tests (test_conformance.py, test_checkpoints.py):
+  - `test_conformance.py::test_kernel` (1 case; XPASS(strict))
+- effect tests (test_effects_*.py, test_references.py):
+  - `test_effects_configs_errors.py::test_kernel_refused` (1 case; AssertionError)
 
 ### `results_axes_reshaped`
 
