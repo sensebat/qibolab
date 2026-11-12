@@ -1,4 +1,4 @@
-"""Elisa's checkpoints CP1..CP5 (D27, D28): the exact qibocal acquisition calls.
+"""Checkpoints CP1..CP5 (D27, D28 in the ZI driver plan): the exact qibocal acquisition calls.
 
 Each test rebuilds the sequence and sweepers of the qibocal ``_acquisition`` function
 (paths relative to ``qibocal/src/qibocal/protocols``) and calls ``platform.execute``

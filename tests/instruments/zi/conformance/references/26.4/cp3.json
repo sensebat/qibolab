@@ -1,0 +1,223 @@
+{
+ "narrow": [
+  {
+   "experiments": [
+    {
+     "channels": {
+      "q0/acquisition": {
+       "frequency": 7000000000.0,
+       "lo": 6800000000.0,
+       "offset": null,
+       "ops": [
+        {
+         "delay": 2000.0
+        },
+        {
+         "acquire": {
+          "duration": 1024.0,
+          "kernel": {
+           "max": 1.0,
+           "n": 2048,
+           "sum": [2048.0, 0.0]
+          },
+          "readout": "0:q0/acquisition:0"
+         }
+        },
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": -30.0,
+       "waits_after_acquires": [1000.0]
+      },
+      "q0/drive": {
+       "frequency": [6298000000.0, 6299000000.0, 6300000000.0, 6301000000.0],
+       "lo": 6200000000.0,
+       "offset": null,
+       "ops": [
+        {
+         "play": {
+          "amplitude": 0.1,
+          "duration": 2000.0,
+          "phase": 0.0,
+          "samples": {
+           "max": 1.0,
+           "n": 4000,
+           "sum": [4000.0, 0.0]
+          }
+         }
+        },
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": 10.0
+      },
+      "q0/flux": {
+       "frequency": null,
+       "lo": 0.0,
+       "offset": 0.1,
+       "ops": [
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": 5.0
+      },
+      "q0/probe": {
+       "frequency": 7000000000.0,
+       "lo": 6800000000.0,
+       "offset": null,
+       "ops": [
+        {
+         "delay": 2000.0
+        },
+        {
+         "play": {
+          "amplitude": 0.1,
+          "duration": 1024.0,
+          "phase": 0.0,
+          "samples": {
+           "max": 1.0,
+           "n": 2048,
+           "sum": [2048.0, 0.0]
+          }
+         }
+        },
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": 5.0
+      },
+      "q1/acquisition": {
+       "frequency": 7001000000.0,
+       "lo": 6800000000.0,
+       "offset": null,
+       "ops": [
+        {
+         "delay": 2000.0
+        },
+        {
+         "acquire": {
+          "duration": 1024.0,
+          "kernel": {
+           "max": 1.0,
+           "n": 2048,
+           "sum": [2048.0, 0.0]
+          },
+          "readout": "0:q1/acquisition:0"
+         }
+        },
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": -30.0,
+       "waits_after_acquires": [1000.0]
+      },
+      "q1/drive": {
+       "frequency": [6299000000.0, 6300000000.0, 6301000000.0, 6302000000.0],
+       "lo": 6200000000.0,
+       "offset": null,
+       "ops": [
+        {
+         "play": {
+          "amplitude": 0.1,
+          "duration": 2000.0,
+          "phase": 0.0,
+          "samples": {
+           "max": 1.0,
+           "n": 4000,
+           "sum": [4000.0, 0.0]
+          }
+         }
+        },
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": 10.0
+      },
+      "q1/flux": {
+       "frequency": null,
+       "lo": 0.0,
+       "offset": 0.1,
+       "ops": [
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": 5.0
+      },
+      "q1/probe": {
+       "frequency": 7001000000.0,
+       "lo": 6800000000.0,
+       "offset": null,
+       "ops": [
+        {
+         "delay": 2000.0
+        },
+        {
+         "play": {
+          "amplitude": 0.1,
+          "duration": 1024.0,
+          "phase": 0.0,
+          "samples": {
+           "max": 1.0,
+           "n": 2048,
+           "sum": [2048.0, 0.0]
+          }
+         }
+        },
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": 5.0
+      }
+     },
+     "execution": {
+      "acquisition_type": "INTEGRATION",
+      "averaging_mode": "CYCLIC",
+      "nshots": 10
+     },
+     "sweeps": [
+      {
+       "parameters": [
+        {
+         "drives": [
+          "q0/drive.frequency"
+         ],
+         "values": [98000000.0, 99000000.0, 100000000.0, 101000000.0]
+        },
+        {
+         "drives": [
+          "q1/drive.frequency"
+         ],
+         "values": [99000000.0, 100000000.0, 101000000.0, 102000000.0]
+        }
+       ],
+       "real_time": true
+      }
+     ],
+     "unmapped_signals": 0
+    }
+   ],
+   "results": {
+    "0:q0/acquisition:0": [
+     [4.2, 0.0],
+     [4.2, 0.1],
+     [4.2, 0.2],
+     [4.2, 0.3]
+    ],
+    "0:q1/acquisition:0": [
+     [4.3, 0.0],
+     [4.3, 0.1],
+     [4.3, 0.2],
+     [4.3, 0.3]
+    ]
+   }
+  }
+ ]
+}

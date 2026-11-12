@@ -1,4 +1,5 @@
 # Offline tests of the Zurich Instruments driver: LabOne Q emulation only, no hardware.
+# ci/README.md explains the page, the rows and columns, and how to run one cell locally.
 #
 # A 2x2 of code (rows) and environment (columns):
 #   R1  ElStabilini/qibolab@zi_drivers, newest commit
@@ -6,38 +7,56 @@
 #       only (nothing pushed); a merge conflict is reported with the files
 #   C1  laboneq pinned: the version in the uv.lock of ElStabilini/qibolab@zi_drivers
 #   C2  laboneq latest: the newest laboneq on PyPI
+# Targets (must be green): R1 x pinned and R2 x latest. R1 x latest and R2 x pinned are
+# information: red there is shown but does not fail the run. The gate job decides the run.
+# An extra row X (no merge) runs an orkun/proto-* branch or the extra_ref dispatch input.
 # Each cell installs the row's uv.lock, replaces laboneq by the column's version (zhinst-*
 # follow, every other package as locked) and runs tests/instruments/zi plus the conformance
 # suite of sensebat/qibolab@orkun/ci. A cell is red when a test fails.
 #
 # Triggers:
-#   schedule (every 30 min)  runs only when the key (R1, R2, orkun/ci commits + newest
-#                            laboneq) differs from the published state.json
-#   workflow_dispatch        always runs (only_if_changed: behave like the schedule)
-#   push to orkun/ci         always runs
-#   push to orkun/26.10      only the R2 cells for that commit; no Pages
-# Runs on orkun/ci publish index.html and state.json at https://sensebat.github.io/qibolab/.
+#   schedule (every 30 min)      runs only when the key (R1, R2, orkun/ci commits + newest
+#                                laboneq) differs from the published state.json; GitHub does
+#                                not fire it in this fork (ci/README.md), see zi-check below
+#   repository_dispatch zi-check same check as the schedule, on the default branch
+#   workflow_dispatch            always runs (only_if_changed: behave like the schedule;
+#                                extra_ref: add that ref as row X)
+#   push to orkun/ci             always runs
+#   push to orkun/26.10          only the R2 cells for that commit; no Pages
+#   push to orkun/proto-*        R1, R2 and the branch as row X; no Pages
+# Pages (https://sensebat.github.io/qibolab/, index.html + state.json) are published only by
+# runs on orkun/ci with rows R1 and R2 and no extra row.
 name: zi-driver
 
 on:
   push:
-    branches: [orkun/ci, orkun/26.10]
-  # schedule and the Run-workflow button work only from the default branch (orkun/ci).
+    branches: [orkun/ci, orkun/26.10, "orkun/proto-*"]
+  # schedule, repository_dispatch and the Run-workflow button use the default branch (orkun/ci).
   schedule:
     - cron: "*/30 * * * *"
+  repository_dispatch:
+    types: [zi-check]
   workflow_dispatch:
     inputs:
       only_if_changed:
         description: Skip when commits and newest laboneq are unchanged (as the schedule does)
         type: boolean
         default: false
+      extra_ref:
+        description: Also run this branch, tag or commit as an extra row X (no merge, no Pages)
+        type: string
+        default: ""
+      extra_repo:
+        description: Repository of extra_ref (default this repository)
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
-# One run per branch at a time; a newer pending run replaces an older pending one.
+# One run per branch (and extra ref) at a time; a newer pending run replaces an older pending one.
 concurrency:
-  group: zi-driver-${{ github.ref }}
+  group: zi-driver-${{ github.ref }}-${{ inputs.extra_ref }}
   cancel-in-progress: false
 
 env:
@@ -47,6 +66,7 @@ env:
   R2_REF: orkun/26.10
   SUITE_REPO: sensebat/qibolab
   SUITE_REF: orkun/ci
+  PROTO_PREFIX: orkun/proto-
   STATE_URL: https://sensebat.github.io/qibolab/state.json
 
 jobs:
@@ -56,17 +76,24 @@ jobs:
     timeout-minutes: 5
     outputs:
       run: ${{ steps.decide.outputs.run }}
+      deploy: ${{ steps.decide.outputs.deploy }}
       key: ${{ steps.decide.outputs.key }}
       r1_sha: ${{ steps.decide.outputs.r1_sha }}
       r2_sha: ${{ steps.decide.outputs.r2_sha }}
       ci_sha: ${{ steps.decide.outputs.ci_sha }}
+      scripts_sha: ${{ steps.decide.outputs.scripts_sha }}
+      extra_repo: ${{ steps.decide.outputs.extra_repo }}
+      extra_ref: ${{ steps.decide.outputs.extra_ref }}
+      extra_sha: ${{ steps.decide.outputs.extra_sha }}
       pinned: ${{ steps.decide.outputs.pinned }}
       latest: ${{ steps.decide.outputs.latest }}
       matrix: ${{ steps.decide.outputs.matrix }}
     steps:
+      # Driver branches (orkun/26.10, orkun/proto-*) use the ci scripts of orkun/ci.
       - name: Check out the ci scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ (github.ref_name == env.R2_REF || startsWith(github.ref_name, env.PROTO_PREFIX)) && env.SUITE_REF || github.sha }}
           sparse-checkout: ci
           persist-credentials: false
 
@@ -76,15 +103,21 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
           ONLY_IF_CHANGED: ${{ inputs.only_if_changed || false }}
+          EXTRA_REF_IN: ${{ inputs.extra_ref }}
+          EXTRA_REPO_IN: ${{ inputs.extra_repo }}
         run: bash ci/changes.sh
 
+  # A skipped run gets one placeholder cell (skip: true) that only prints why; a job skipped
+  # by `if` would show its unexpanded name "matrix.name".
   cell:
     name: ${{ matrix.name }}
     needs: changes
-    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # A red information cell stays red here but does not fail the run; the gate job decides.
+    continue-on-error: ${{ !matrix.target }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
@@ -92,37 +125,71 @@ jobs:
       ROW: ${{ matrix.row }}
       COL: ${{ matrix.col }}
       R1_SHA: ${{ needs.changes.outputs.r1_sha }}
+      EXTRA_REPO: ${{ needs.changes.outputs.extra_repo }}
+      EXTRA_REF: ${{ needs.changes.outputs.extra_ref }}
       LABONEQ_PINNED: ${{ needs.changes.outputs.pinned }}
       LABONEQ_LATEST: ${{ needs.changes.outputs.latest }}
     steps:
+      - name: Nothing changed since the published report
+        if: matrix.skip
+        run: echo "Commits and newest laboneq equal the published state.json; nothing to test."
+
+      # Without repo and sha the checkout below would take this run's own commit and test it
+      # under the row's label. That happens when ci/changes.sh (from scripts_sha) is older
+      # than this workflow file, e.g. an orkun/proto-* push while orkun/ci is older.
+      - name: Check the cell plan
+        if: ${{ !matrix.skip }}
+        env:
+          CELL_REPO: ${{ matrix.repo }}
+          CELL_SHA: ${{ matrix.sha }}
+        run: |
+          if [ -z "$CELL_REPO" ] || [ -z "$CELL_SHA" ]; then
+            echo "::error::cell plan without repo or commit: ci/changes.sh does not match this workflow file (orkun/ci older than ci-rc1?)"
+            exit 1
+          fi
+
       - name: Check out the row's code
+        if: ${{ !matrix.skip }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ matrix.row == 'r1' && env.R1_REPO || env.R2_REPO }}
-          ref: ${{ matrix.row == 'r1' && needs.changes.outputs.r1_sha || needs.changes.outputs.r2_sha }}
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.sha }}
           path: driver
           # The R2 merge needs history.
-          fetch-depth: ${{ matrix.row == 'r2' && '0' || '1' }}
+          fetch-depth: ${{ matrix.depth }}
           persist-credentials: false
 
-      - name: Check out the conformance suite and ci scripts (orkun/ci)
+      - name: Check out the conformance suite (orkun/ci)
+        if: ${{ !matrix.skip }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.changes.outputs.ci_sha }}
           path: suite
+          sparse-checkout: tests/instruments/zi/conformance
+          persist-credentials: false
+
+      - name: Check out the ci scripts
+        if: ${{ !matrix.skip }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.changes.outputs.scripts_sha }}
+          path: scripts
+          sparse-checkout: ci
           persist-credentials: false
 
       - name: Install uv and Python 3.13
+        if: ${{ !matrix.skip }}
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.13"
           cache-dependency-glob: driver/uv.lock
 
       - name: Merge (R2), install, set laboneq, test
-        run: bash suite/ci/run_cell.sh driver suite "cell-$ROW-$COL"
+        if: ${{ !matrix.skip }}
+        run: bash scripts/ci/run_cell.sh driver suite "cell-$ROW-$COL"
 
       - name: Upload the cell results
-        if: always()
+        if: ${{ always() && !matrix.skip }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cell-${{ matrix.cell }}
@@ -139,6 +206,7 @@ jobs:
       - name: Check out the report script
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.changes.outputs.scripts_sha }}
           sparse-checkout: ci
           persist-credentials: false
 
@@ -155,6 +223,9 @@ jobs:
           R1_SHA: ${{ needs.changes.outputs.r1_sha }}
           R2_SHA: ${{ needs.changes.outputs.r2_sha }}
           CI_SHA: ${{ needs.changes.outputs.ci_sha }}
+          EXTRA_REPO: ${{ needs.changes.outputs.extra_repo }}
+          EXTRA_REF: ${{ needs.changes.outputs.extra_ref }}
+          EXTRA_SHA: ${{ needs.changes.outputs.extra_sha }}
           LABONEQ_PINNED: ${{ needs.changes.outputs.pinned }}
           LABONEQ_LATEST: ${{ needs.changes.outputs.latest }}
           MATRIX: ${{ needs.changes.outputs.matrix }}
@@ -169,11 +240,36 @@ jobs:
           name: test-report
           path: report/
 
-  # Publish at https://sensebat.github.io/qibolab/ (orkun/ci only), also when a cell is red.
+  # The run's conclusion: success exactly when every target cell of this run is green.
+  gate:
+    name: Targets green
+    needs: [changes, cell, report]
+    if: always() && needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the gate script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.changes.outputs.scripts_sha }}
+          sparse-checkout: ci
+          persist-credentials: false
+
+      - name: Download the report
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-report
+          path: report
+
+      - name: Check the target cells
+        run: python3 ci/gate.py report/state.json
+
+  # Publish at https://sensebat.github.io/qibolab/ (orkun/ci, rows R1 and R2 only), also when a
+  # cell is red.
   pages:
     name: Publish to GitHub Pages
-    needs: report
-    if: always() && needs.report.result == 'success' && github.ref == 'refs/heads/orkun/ci'
+    needs: [changes, report]
+    if: always() && needs.report.result == 'success' && needs.changes.outputs.deploy == 'true' && github.ref == 'refs/heads/orkun/ci'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
