@@ -6,13 +6,13 @@ Caught by: `assertion` = at least one test fails on an assertion (or a strict xf
 
 ## Summary
 
-35 of 35 planted bugs turn at least one test red. No gaps.
+36 of 36 planted bugs turn at least one test red. No gaps.
 
 | planted bug | what it does | caught by | driver tests | contract tests | effect tests |
 |---|---|---|---|---|---|
 | `amplitude_sweep_ignored` | swept amplitudes are not used when playing | assertion | 0 | 0 | 8 |
 | `relaxation_zero` | relaxation time is 0 | assertion | 0 | 0 | 8 |
-| `phase_dropped` | relative phase of pulses is dropped | assertion | 0 | 0 | 2 |
+| `phase_dropped` | relative phase of pulses is dropped | assertion | 0 | 0 | 3 |
 | `results_q_is_i` | results: Q is replaced by I | assertion | 0 | 0 | 14 |
 | `sweep_grid_reversed` | sweep values are reversed | assertion | 1 | 0 | 17 |
 | `pulse_on_wrong_channel` | pulses on a drive channel are played on the drive of another qubit | assertion | 0 | 0 | 5 |
@@ -30,6 +30,7 @@ Caught by: `assertion` = at least one test fails on an assertion (or a strict xf
 | `calibration_cached` | the calibration of the first call is reused by later calls | assertion | 0 | 0 | 3 |
 | `samples_q_is_i` | pulse samples: Q is replaced by I | assertion | 0 | 0 | 14 |
 | `samples_iq_swapped` | pulse samples: I and Q are swapped | assertion | 0 | 0 | 12 |
+| `probe_phase_dropped` | relative phase of probe pulses is dropped | assertion | 0 | 0 | 1 |
 | `sampling_rate_hdawg` | samples are computed at the HDAWG rate (2.4 GSa/s) on SHF instruments | assertion | 1 | 0 | 16 |
 | `delays_dropped` | delays of a sequence are not played | assertion | 0 | 0 | 6 |
 | `probe_delay_dropped` | a delay on an acquisition channel does not delay its probe channel | assertion | 0 | 3 | 5 |
@@ -59,7 +60,7 @@ swept amplitudes are not used when playing.
 - effect tests (test_effects_*.py, test_references.py):
   - `test_effects_sweeps.py::test_drive_amplitude_sweep` (1 case; AssertionError)
   - `test_effects_sweeps.py::test_nested_drive_sweepers_grid` (1 case; AssertionError)
-  - `test_effects_sweeps.py::test_nested_probe_sweepers_grid` (1 case; AttributeError)
+  - `test_effects_sweeps.py::test_nested_probe_sweepers_grid` (1 case; Missing)
   - `test_effects_sweeps.py::test_one_amplitude_sweeper_two_drives` (1 case; AssertionError)
   - `test_effects_sweeps.py::test_one_amplitude_sweeper_two_probes` (1 case; AssertionError)
   - `test_effects_sweeps.py::test_probe_amplitude_sweep` (1 case; AssertionError)
@@ -90,6 +91,7 @@ relative phase of pulses is dropped.
 - contract tests (test_conformance.py, test_checkpoints.py): none
 - effect tests (test_effects_*.py, test_references.py):
   - `test_effects_pulses.py::test_amplitude_and_phase_reach_their_drive` (1 case; AssertionError)
+  - `test_effects_pulses.py::test_multiplexed_readouts_on_their_channels` (1 case; AssertionError)
   - `test_effects_sweeps.py::test_drive_amplitude_sweep` (1 case; AssertionError)
 
 ### `results_q_is_i`
@@ -387,6 +389,15 @@ pulse samples: I and Q are swapped.
   - `test_references.py::test_cp3_reference` (1 case; AssertionError)
   - `test_references.py::test_cp4_reference` (1 case; AssertionError)
   - `test_references.py::test_cp5_reference` (1 case; AssertionError)
+
+### `probe_phase_dropped`
+
+relative phase of probe pulses is dropped.
+
+- driver tests (tests/instruments/zi/test_*.py): none
+- contract tests (test_conformance.py, test_checkpoints.py): none
+- effect tests (test_effects_*.py, test_references.py):
+  - `test_effects_pulses.py::test_multiplexed_readouts_on_their_channels` (1 case; AssertionError)
 
 ### `sampling_rate_hdawg`
 
