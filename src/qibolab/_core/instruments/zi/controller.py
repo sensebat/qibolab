@@ -427,6 +427,11 @@ class ZiController(Controller):
         if options.fast_reset:
             raise NotImplementedError("Fast reset is not supported.")
 
+        layouts = [
+            pulse.layout(sequence, self.channels, self.sampling_rate)
+            for sequence in sequences
+        ]
+        pulse.check_lines(layouts, self.channels)
         ids = signals(self.channels, sequences)
         calib = calibration(
             ids, self.channels, self.instruments, configs, self.sampling_rate
@@ -448,13 +453,11 @@ class ZiController(Controller):
             )
             for group in real:
                 stack.enter_context(experiment.sweep(parameter=group))
-            for sequence in sequences:
+            for blocks in layouts:
                 with experiment.section():
-                    for id in ids:
-                        experiment.reserve(id)
                     pulse.play(
                         experiment,
-                        sequence,
+                        blocks,
                         self.channels,
                         configs,
                         self.sampling_rate,

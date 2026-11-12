@@ -288,3 +288,111 @@ def test_flux_filters_limits(connected, configs, filters, limit):  # noqa: F811
     flux = Pulse(duration=100, amplitude=0.4, envelope=Rectangular())
     with pytest.raises(Exception, match=limit):
         run(connected, configs, [PulseSequence([("q0/flux", flux), readout()])])
+
+
+def probe_segments(controller, compiled, length=2.2e-6):
+    """Start and end in ns of each pulse on the QA line of all the probes."""
+    return segments(*wave(controller, compiled[-1], "q0/probe", length))
+
+
+def test_readout_after_delay(connected, compiled, configs):  # noqa: F811
+    """A delay on the acquisition channel delays the probe as well."""
+    sequence = PulseSequence([("q0/acquisition", Delay(duration=140)), readout()])
+    run(connected, configs, [sequence])
+    assert probe_segments(connected, compiled) == [(140, 1140)]
+
+
+def test_readouts_at_different_times(connected, compiled, configs):  # noqa: F811
+    """Two qubits of one QA line, read out one after the other (audit G3/X03)."""
+    drive = Pulse(duration=40, amplitude=0.5, envelope=Rectangular())
+    sequence = PulseSequence(
+        [
+            ("q0/drive", drive),
+            ("q0/acquisition", Delay(duration=40)),
+            readout(0),
+            ("q1/drive", drive.new()),
+            ("q1/acquisition", Delay(duration=1104)),
+            readout(1),
+        ]
+    )
+    run(connected, configs, [sequence])
+    assert probe_segments(connected, compiled) == [(40, 1040), (1104, 2104)]
+
+
+def test_overlapping_readouts_different_start(connected, configs):  # noqa: F811
+    """Readouts on one QA line that overlap must start together: LabOne Q refuses."""
+    sequence = PulseSequence(
+        [readout(0), ("q1/acquisition", Delay(duration=48)), readout(1)]
+    )
+    with pytest.raises(ValueError, match="must start together"):
+        run(connected, configs, [sequence])
+
+
+def test_two_readouts_of_one_qubit(connected, compiled, configs):  # noqa: F811
+    """Mid-circuit measurement: readout, drive, readout again (F47)."""
+    drive = Pulse(duration=40, amplitude=0.5, envelope=Rectangular())
+    sequence = PulseSequence(
+        [
+            readout(0),
+            ("q0/drive", Delay(duration=1000)),
+            ("q0/drive", drive),
+            ("q0/acquisition", Delay(duration=40)),
+            readout(0),
+        ]
+    )
+    results = run(connected, configs, [sequence])
+    assert len(results) == 2
+    assert probe_segments(connected, compiled) == [(0, 1000), (1040, 2040)]
+    time, out = wave(connected, compiled[-1], "q0/drive", 2.5e-6)
+    assert segments(time, out) == [(1000, 1040)]
+
+
+def test_readouts_sub_grid(connected, compiled, configs):  # noqa: F811
+    """A readout 4 ns off the 8 ns grid of the readout sections starts on time."""
+    sequence = PulseSequence([("q0/acquisition", Delay(duration=1004)), readout()])
+    run(connected, configs, [sequence])
+    assert probe_segments(connected, compiled) == [(1004, 2004)]
+
+
+def test_readouts_sub_grid_mismatch(connected, configs):  # noqa: F811
+    """Readouts on one QA line start at the same time modulo 8 ns."""
+    drive = Pulse(duration=40, amplitude=0.5, envelope=Rectangular())
+    sequence = PulseSequence(
+        [
+            readout(0),
+            ("q0/drive", Delay(duration=1000)),
+            ("q0/drive", drive),
+            ("q0/acquisition", Delay(duration=44)),
+            readout(0),
+        ]
+    )
+    with pytest.raises(ValueError, match="modulo 8.0 ns"):
+        run(connected, configs, [sequence])
+    first = PulseSequence([readout(0)])
+    second = PulseSequence([("q1/acquisition", Delay(duration=4)), readout(1)])
+    with pytest.raises(ValueError, match="modulo 8.0 ns"):
+        run(connected, configs, [first, second])
+
+
+def test_readouts_too_close(connected, configs):  # noqa: F811
+    """The section of a readout ends on the grid after it: the next one waits."""
+    probe = PROBE.model_copy(update={"duration": 1001})
+    sequence = PulseSequence([readout(probe=probe), readout()])
+    with pytest.raises(ValueError, match="too close"):
+        run(connected, configs, [sequence])
+
+
+def test_sequences_follow_relaxation(connected, compiled, configs):  # noqa: F811
+    """The second sequence starts after the first one and the relaxation time."""
+    drive = Pulse(duration=40, amplitude=0.5, envelope=Rectangular())
+    first = PulseSequence(
+        [("q0/drive", drive), ("q0/acquisition", Delay(duration=40)), readout(0)]
+    )
+    second = PulseSequence(
+        [("q1/drive", drive.new()), ("q1/acquisition", Delay(duration=40)), readout(1)]
+    )
+    run(connected, configs, [first, second])
+    # first: 40 + 1000 ns, then 1000 ns relaxation
+    assert probe_segments(connected, compiled, 3.5e-6) == [(40, 1040), (2080, 3080)]
+    time, out = wave(connected, compiled[-1], "q1/drive", 3.5e-6)
+    assert segments(time, out) == [(2040, 2080)]
