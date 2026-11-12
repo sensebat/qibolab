@@ -58,7 +58,7 @@ analysis = [
   "ruff>=0.16.0,<0.17.0",
 ]
 zi = [
-  "laboneq>=26.4,<26.5",
+  "laboneq>=26.10,<26.11",
 ]
 
 [build-system]
