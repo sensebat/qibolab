@@ -162,7 +162,7 @@ Merge order sweeps, pulses, acquisition. Choices made at the merge (offline LabO
 - Fast reset plays the reset pulse directly in the `match` case.
 - `test_calibration.py::test_compile` and `test_controller.py::test_disconnect_zeroes_dc_offsets` read `recipe` (26.4.0) or `artifacts` (26.10.1), so all ZI tests pass on both versions.
 
-Cross-check with the conformance suite of `sensebat/qibolab@orkun/rc-tests`: see `sources/review/proto-crosscheck.md` in the QSolid hub. Still open:
+Cross-check with the conformance suite of `sensebat/qibolab@orkun/rc-tests` (offline LabOne Q emulation). Still open:
 
 - F48 with RX lengths 40 and 48 ns: readouts on one QA line that overlap with different starts are refused (LabOne Q refuses them). qibocal rabi on uneven RX needs either that refusal or moving the earlier readout.
 - F45 fast reset: the conformance test calls it with INTEGRATION, no threshold and no reset pulse; the prototype needs DISCRIMINATION, a threshold and `ZiController.reset_pulses`. The qibolab `Controller.play` interface has no natives.
