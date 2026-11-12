@@ -2,7 +2,7 @@
 
 from laboneq.simple import Calibration, ModulationType, SweepParameter
 
-from qibolab._core.components import Channel, Config, DcChannel
+from qibolab._core.components import Channel, Config, DcChannel, IqChannel
 from qibolab._core.identifier import ChannelId
 from qibolab._core.pulses import PulseId
 from qibolab._core.sweeper import ParallelSweepers, Parameter
@@ -58,6 +58,8 @@ def _group(
     for sweeper in group:
         if sweeper.parameter is Parameter.frequency:
             for id in sweeper.channels:
+                if not isinstance(channels[id], IqChannel):
+                    raise TypeError(f"Cannot sweep the frequency of '{id}', not IQ.")
                 oscillator = calibration[id].oscillator
                 lo = configs[channels[id].lo].frequency
                 oscillator.frequency = SweepParameter(values=sweeper.values - lo)

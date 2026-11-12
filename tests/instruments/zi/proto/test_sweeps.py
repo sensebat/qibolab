@@ -330,3 +330,14 @@ def test_mixed(connected, configs, averaging_mode):  # noqa: F811
     """
     sequence, _ = ramsey_vz([0])
     run(connected, configs, sequence, mixed(configs, sequence), averaging_mode)
+
+
+@pytest.mark.parametrize("id", ["q0/flux", "q0/acquisition"])
+def test_frequency_not_iq(channels, configs, id):  # noqa: F811
+    """X06: a frequency sweep on a channel without oscillator names the channel."""
+    calib = calibration([id], channels, INSTRUMENTS, configs)
+    frequency = Sweeper(
+        parameter=Parameter.frequency, values=np.array([1.0, 2.0]), channels=[id]
+    )
+    with pytest.raises(TypeError, match=id):
+        split([[frequency]], channels, configs, calib, {})
