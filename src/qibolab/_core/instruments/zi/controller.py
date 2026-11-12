@@ -307,8 +307,8 @@ def calibration(
     the QA channel of an SHFQC). Filters of a DC channel become its
     precompensation, see :func:`precompensation`.
 
-    With ``discriminate``, each acquisition channel gets the opposite of the
-    ``threshold`` of its config, to go with the negated kernel of
+    With ``discriminate``, each acquisition channel gets the ``threshold`` of its
+    config times :func:`.pulse.discrimination_sign`, as the kernel of
     :func:`.pulse.kernel`.
     """
     los: dict[str, Oscillator] = {}
@@ -352,7 +352,7 @@ def calibration(
             if discriminate:
                 if config.threshold is None:
                     raise ValueError(f"Channel '{id}' has no threshold.")
-                calib[id].threshold = -config.threshold
+                calib[id].threshold = pulse.discrimination_sign() * config.threshold
         else:
             calib[id] = SignalCalibration(
                 oscillator=oscillator(id),

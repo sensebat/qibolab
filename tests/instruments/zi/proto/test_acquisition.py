@@ -118,11 +118,16 @@ def test_discrimination(connected, configs, averaging_mode):  # noqa: F811
 
 
 def test_discrimination_kernel_threshold(connected, configs, monkeypatch):  # noqa: F811
-    """LabOne Q gets the opposite threshold and the kernel ``-exp(1j * iq_angle)``.
+    """LabOne Q gets ``sign * threshold`` and the kernel ``sign * exp(1j * iq_angle)``.
 
-    LabOne Q assigns state 0 above its threshold, qibolab state 1 above
-    ``threshold`` after rotating by ``iq_angle`` (see :func:`zi.pulse.kernel`).
+    Qibolab assigns state 1 above ``threshold`` after rotating by ``iq_angle``.
+    LabOne Q assigns state 0 above its threshold in laboneq 26.4.0 (``sign = -1``)
+    and state 1 in 26.10.1 (``sign = 1``); see :func:`zi.pulse.discrimination_sign`.
+    The sign is read here from the LabOne Q assignment vector.
     """
+    from laboneq.controller.devices.qachannel import _calc_theoretical_assignment_vec
+
+    sign = 1 if _calc_theoretical_assignment_vec(1)[1] == 1 else -1
     experiments = compiled(connected, monkeypatch)
     opts = options(AveragingMode.SINGLESHOT).model_copy(
         update={"acquisition_type": AcquisitionType.DISCRIMINATION}
@@ -130,11 +135,11 @@ def test_discrimination_kernel_threshold(connected, configs, monkeypatch):  # no
     connected.play(discriminating(configs), [drives([0])], opts, [])
 
     (experiment,) = experiments
-    assert experiment.get_calibration()["q0/acquisition"].threshold == -0.3
+    assert experiment.get_calibration()["q0/acquisition"].threshold == sign * 0.3
     (acquire,) = operations(experiment, Acquire)
     samples = acquire.kernel.samples
     assert len(samples) == 2000
-    np.testing.assert_allclose(samples, -np.exp(0.7j))
+    np.testing.assert_allclose(samples, sign * np.exp(0.7j))
 
 
 def test_discrimination_needs_threshold(connected, configs):  # noqa: F811

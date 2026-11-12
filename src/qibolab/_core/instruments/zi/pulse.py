@@ -476,6 +476,22 @@ def _op(
 
 
 @cache
+def discrimination_sign() -> float:
+    """1 if LabOne Q assigns state 1 above the threshold of a 2-state
+    discrimination, -1 if it assigns state 0.
+
+    LabOne Q sets the assignment vector of the SHFQA multistate unit with
+    ``_calc_theoretical_assignment_vec`` (``controller/devices/qachannel.py``). For
+    2 states it gives state 0 above the threshold in laboneq 26.4.0 (zhinst-utils
+    0.7.1), and state 1 in laboneq 26.10.1 (zhinst-utils 0.7.2 swaps the two states
+    of each weight in ``QuditSettings``).
+    """
+    from laboneq.controller.devices.qachannel import _calc_theoretical_assignment_vec
+
+    return 1.0 if _calc_theoretical_assignment_vec(1)[1] == 1 else -1.0
+
+
+@cache
 def kernel(
     duration: float,
     sampling_rate: float,
@@ -486,11 +502,10 @@ def kernel(
 
     The integration weights ``w`` are the ``weights`` of the acquisition config (the
     kernel as qibocal computes it), or unit weights. To discriminate, pass the
-    ``iq_angle`` of the config: the weights become ``-exp(1j * iq_angle) * w``, and
-    :func:`.controller.calibration` sets the threshold to ``-threshold``. Qibolab
-    (as qm and qibocal) assigns state 1 when ``Re(sum(w * s) * exp(1j * iq_angle))
-    > threshold``; LabOne Q assigns state 0 when the integrated result is above its
-    threshold (2-state assignment vector of its multistate setup).
+    ``iq_angle`` of the config: the weights become ``sign * exp(1j * iq_angle) * w``,
+    and :func:`.controller.calibration` sets the threshold to ``sign * threshold``,
+    with ``sign`` from :func:`discrimination_sign`. Qibolab (as qm and qibocal)
+    assigns state 1 when ``Re(sum(w * s) * exp(1j * iq_angle)) > threshold``.
 
     The kernel given to LabOne Q is ``w`` as it is: LabOne Q integrates
     ``sum(kernel * s)`` over the trace ``s`` its RAW acquisition returns, the
@@ -509,7 +524,7 @@ def kernel(
     n = round(duration * sampling_rate)
     w = np.ones(n, dtype=complex) if weights is None else np.array(weights)
     if iq_angle is not None:
-        w = -np.exp(1j * iq_angle) * w
+        w = discrimination_sign() * np.exp(1j * iq_angle) * w
     return pulse_library.sampled_pulse(w)
 
 
