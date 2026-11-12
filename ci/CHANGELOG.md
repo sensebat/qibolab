@@ -20,7 +20,8 @@ First release candidate of the zi-driver CI on sensebat/qibolab.
   (ci/README.md).
 - Job summary: headline, grid, failed tests and the feature table.
 - Driver branches (orkun/26.10, orkun/proto-*) use the ci scripts of orkun/ci.
-- Skipped runs name the cell job "Cells (skipped, nothing changed)".
+- Skipped runs show one placeholder cell job "Cells: skipped, nothing changed" instead of
+  "matrix.name".
 - Conformance suite: contract and effect tests per feature, planted-bug runs, CP1-CP5
   reference files (tests/instruments/zi/conformance).
 - Docs: ci/README.md.

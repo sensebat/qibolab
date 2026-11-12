@@ -87,7 +87,7 @@ if [ -n "$extra_sha" ]; then rows="$rows x"; fi
 deploy=false
 if [ "$REF_NAME" = "$SUITE_REF" ] && [ "$rows" = "r1 r2" ]; then deploy=true; fi
 
-export ROWS=$rows R1_SHA=$r1_sha R2_SHA=$r2_sha PINNED=$pinned LATEST=$latest
+export RUN=$run ROWS=$rows R1_SHA=$r1_sha R2_SHA=$r2_sha PINNED=$pinned LATEST=$latest
 export EXTRA_REPO=$extra_repo EXTRA_REF=$extra_ref EXTRA_SHA=$extra_sha
 matrix=$(python3 - <<'EOF'
 import json, os
@@ -110,6 +110,8 @@ for r in e["ROWS"].split():
             "repo": repo, "sha": sha, "depth": 0 if r == "r2" else 1,
             "name": f"{r.upper()} x {env[c]} · {role} · {repo}@{ref} ({sha[:8]}){merged}",
         })
+if e["RUN"] != "true":  # one placeholder, so the skipped cell job has a readable name
+    cells = [{"cell": "none", "skip": True, "name": "Cells: skipped, nothing changed"}]
 print(json.dumps({"include": cells}))
 EOF
 )

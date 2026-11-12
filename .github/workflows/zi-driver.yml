@@ -109,11 +109,11 @@ jobs:
           EXTRA_REPO_IN: ${{ inputs.extra_repo }}
         run: bash ci/changes.sh
 
+  # A skipped run gets one placeholder cell (skip: true) that only prints why; a job skipped
+  # by `if` would show its unexpanded name "matrix.name".
   cell:
-    # The fallback names the job when the run is skipped (no matrix then).
-    name: ${{ matrix.name || 'Cells (skipped, nothing changed)' }}
+    name: ${{ matrix.name }}
     needs: changes
-    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # A red information cell stays red here but does not fail the run; the gate job decides.
@@ -130,7 +130,12 @@ jobs:
       LABONEQ_PINNED: ${{ needs.changes.outputs.pinned }}
       LABONEQ_LATEST: ${{ needs.changes.outputs.latest }}
     steps:
+      - name: Nothing changed since the published report
+        if: matrix.skip
+        run: echo "Commits and newest laboneq equal the published state.json; nothing to test."
+
       - name: Check out the row's code
+        if: ${{ !matrix.skip }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ matrix.repo }}
@@ -141,6 +146,7 @@ jobs:
           persist-credentials: false
 
       - name: Check out the conformance suite (orkun/ci)
+        if: ${{ !matrix.skip }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.changes.outputs.ci_sha }}
@@ -149,6 +155,7 @@ jobs:
           persist-credentials: false
 
       - name: Check out the ci scripts
+        if: ${{ !matrix.skip }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.changes.outputs.scripts_sha }}
@@ -157,16 +164,18 @@ jobs:
           persist-credentials: false
 
       - name: Install uv and Python 3.13
+        if: ${{ !matrix.skip }}
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.13"
           cache-dependency-glob: driver/uv.lock
 
       - name: Merge (R2), install, set laboneq, test
+        if: ${{ !matrix.skip }}
         run: bash scripts/ci/run_cell.sh driver suite "cell-$ROW-$COL"
 
       - name: Upload the cell results
-        if: always()
+        if: ${{ always() && !matrix.skip }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cell-${{ matrix.cell }}
