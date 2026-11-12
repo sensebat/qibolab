@@ -55,6 +55,7 @@ InstrumentKind = Literal["HDAWG", "SHFSG", "SHFQA"]
 _AVERAGING = {
     AveragingMode.CYCLIC: lq.AveragingMode.CYCLIC,
     AveragingMode.SINGLESHOT: lq.AveragingMode.SINGLE_SHOT,
+    AveragingMode.SEQUENTIAL: lq.AveragingMode.SEQUENTIAL,
 }
 
 _INSTRUMENT_CLASSES = {"HDAWG": HDAWG, "SHFSG": SHFSG, "SHFQA": SHFQA}
@@ -377,13 +378,10 @@ class ZiController(Controller):
         Each sequence is followed by the relaxation time. Sweeps of the frequency of
         a hardware-modulated channel (drive) run in real time, inside the acquisition
         loop; all the others run in near time, around it. Only
-        :attr:`AcquisitionType.INTEGRATION` is supported, with cyclic or single-shot
-        averaging.
+        :attr:`AcquisitionType.INTEGRATION` is supported, with any averaging mode.
         """
         if options.acquisition_type is not AcquisitionType.INTEGRATION:
             raise NotImplementedError(f"{options.acquisition_type} is not supported.")
-        if options.averaging_mode not in _AVERAGING:
-            raise NotImplementedError(f"{options.averaging_mode} is not supported.")
         if options.fast_reset:
             raise NotImplementedError("Fast reset is not supported.")
 

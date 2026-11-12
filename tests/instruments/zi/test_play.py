@@ -174,7 +174,6 @@ def test_unsupported(connected, configs):  # noqa: F811
         connected.play(configs, [sequence], opts, [parallel])
     for update in (
         {"fast_reset": True},
-        {"averaging_mode": AveragingMode.SEQUENTIAL},
         {"acquisition_type": AcquisitionType.DISCRIMINATION},
         {"acquisition_type": AcquisitionType.RAW},
     ):
