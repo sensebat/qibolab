@@ -10,6 +10,13 @@ refusal it gets), observed at the LabOne Q boundary and run under planted driver
 (``test_effects_*.py``). An empty list means no effect test yet; the contract tests of
 ``test_conformance.py`` still cover the feature. test_effects_smoke.py checks that this
 field and the ``feature`` markers agree.
+
+Adding a row: take the next free id (ids are never reused or renumbered), put the row
+in its group, set ``checkpoint`` to the first checkpoint whose qibocal protocol hits
+the feature on the conformance rack (``beyond`` if none), and list its effect tests in
+``effects`` once they carry ``@pytest.mark.feature("<id>")``. F48-F54 come from the
+audit in sources/review/unimplemented-audit (G3-G7, X01, X20); X23 (duration sweep on
+a delay) is F07.
 """
 
 FEATURES = [
@@ -278,6 +285,7 @@ FEATURES = [
         "effects": [
             "test_effects_acquisition.py::test_multiplexed_results_reach_their_readout",
             "test_effects_pulses.py::test_multiplexed_readouts_on_their_channels",
+            "test_missing_infra.py::test_probes_of_different_length_on_one_line",
         ],
     },
     {
@@ -362,6 +370,28 @@ FEATURES = [
         "laboneq": "two acquire() on one signal, one handle each",
         "effects": [],
     },
+    {
+        "id": "F48",
+        "title": "Readouts that start at different times in one sequence (after drives of different lengths, mid-circuit)",
+        "group": "sequence",
+        "checkpoint": "CP4",
+        "qibocal": "rabi_amplitude_signal on several qubits whose RX lengths differ: each readout waits for its own RX (rabi/utils.py:327, qibocal b559e4a7)",
+        "laboneq": "one section per readout time, or acquire sections placed with play_after",
+        "effects": [
+            "test_missing_infra.py::test_readouts_at_different_times",
+        ],
+    },
+    {
+        "id": "F49",
+        "title": "Two probe waveforms for one qubit in one call",
+        "group": "sequence",
+        "checkpoint": "beyond",
+        "qibocal": "none found (qibocal b559e4a7); a call mixing the MZ native with a readout of another length",
+        "laboneq": "SHFQA readout pulses per waveform slot; one slot per probe length",
+        "effects": [
+            "test_missing_infra.py::test_two_probe_lengths_one_qubit",
+        ],
+    },
     # envelope
     {
         "id": "F31",
@@ -440,6 +470,28 @@ FEATURES = [
         "laboneq": "sampled_pulse_complex",
         "effects": [
             "test_effects_pulses.py::test_custom_envelope_samples_played",
+        ],
+    },
+    {
+        "id": "F50",
+        "title": "Pulse chirp",
+        "group": "envelope",
+        "checkpoint": "beyond",
+        "qibocal": "none found (qibocal b559e4a7); Pulse.chirp is read by the qibolab qm driver (qm/program/instructions.py)",
+        "laboneq": "sampled pulse with the chirp phase, or a swept oscillator frequency",
+        "effects": [
+            "test_missing_infra.py::test_chirp_reaches_waveform",
+        ],
+    },
+    {
+        "id": "F51",
+        "title": "Pulse and delay lengths that are not a whole number of samples",
+        "group": "envelope",
+        "checkpoint": "beyond",
+        "qibocal": "any protocol with a calibrated pulse length off the 0.5 ns grid (natives in the platform parameters)",
+        "laboneq": "play(length=...) or samples rounded to the nearest sample, delays on the same grid",
+        "effects": [
+            "test_missing_infra.py::test_duration_off_sample_grid",
         ],
     },
     # config
@@ -537,6 +589,40 @@ FEATURES = [
         "laboneq": "active reset, conditional play on the measured state",
         "effects": [
             "test_effects_configs_errors.py::test_fast_reset_refused",
+        ],
+    },
+    {
+        "id": "F53",
+        "title": "Default execute options (DISCRIMINATION, SINGLESHOT)",
+        "group": "execution",
+        "checkpoint": "beyond",
+        "qibocal": "none (protocols pass their options); qibolab's qibo backend calls platform.execute(sequences, nshots=...) (backends.py:138,179)",
+        "laboneq": "AcquisitionType.DISCRIMINATION, AveragingMode.SINGLE_SHOT",
+        "effects": [
+            "test_missing_infra.py::test_default_execute_options",
+        ],
+    },
+    {
+        "id": "F54",
+        "title": "Parallel sweepers mixing near time and real time (e.g. drive and probe frequency)",
+        "group": "sweep",
+        "checkpoint": "beyond",
+        "qibocal": "none found (qibocal b559e4a7); ElStabilini/qibolab@zi_drivers test_play.py:172-174 asserts it refused",
+        "laboneq": "one sweep() over both parameters, run in near time",
+        "effects": [
+            "test_missing_infra.py::test_parallel_drive_and_probe_frequency",
+        ],
+    },
+    # platform
+    {
+        "id": "F52",
+        "title": "Other instruments: SHFQC, UHFQA, HDAWG IQ outputs, SHFPPC",
+        "group": "platform",
+        "checkpoint": "beyond",
+        "qibocal": "none; it depends on the rack (the conformance rack uses SHFSG, SHFQA, HDAWG DC outputs)",
+        "laboneq": "SHFQC, UHFQA, HDAWG (SIGOUTS pairs), SHFPPC in the device setup",
+        "effects": [
+            "test_missing_infra.py::test_instrument_kinds",
         ],
     },
 ]

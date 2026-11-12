@@ -507,6 +507,47 @@ def refusal_messages_vague(mp):
     _wrap_controller_play(mp, refusal="Not supported.")
 
 
+# accepted but silently wrong: what a driver that stops refusing a feature without
+# implementing it would do. Tests that accept "refused or works" must catch these.
+
+
+@mutant("fast_reset is accepted and ignored")
+def fast_reset_ignored(mp):
+    _wrap_controller_play(mp, lambda options: {"fast_reset": False})
+
+
+@mutant("sweepers of parameters other than frequency and amplitude are dropped")
+def unsupported_sweepers_dropped(mp):
+    kept = (Parameter.frequency, Parameter.amplitude)
+
+    def drop(sweepers):
+        groups = [[s for s in group if s.parameter in kept] for group in sweepers]
+        return [group for group in groups if len(group) > 0]
+
+    original = controller.ZiController.play
+
+    def patched(self, configs, seqs, options, sweepers):
+        return original(self, configs, seqs, options, drop(sweepers))
+
+    mp.setattr(controller.ZiController, "play", patched)
+
+
+@mutant("integration kernels in acquisition configs are ignored (unit weights)")
+def kernel_ignored(mp):
+    original = controller.ZiController.play
+
+    def patched(self, configs, seqs, options, sweepers):
+        configs = {
+            id: config.model_copy(update={"kernel": None})
+            if getattr(config, "kernel", None) is not None
+            else config
+            for id, config in configs.items()
+        }
+        return original(self, configs, seqs, options, sweepers)
+
+    mp.setattr(controller.ZiController, "play", patched)
+
+
 # results
 
 
@@ -558,8 +599,11 @@ def _first_line(error: Exception) -> str:
     return lines[0] if lines else type(error).__name__
 
 
-def kills(*names: str):
+def kills(*names: str, driver_marks=()):
     """Run the test on the driver (must pass) and under each mutant (must fail).
+
+    ``driver_marks`` go on the ``driver`` case only, e.g. a strict xfail while the
+    driver itself does not pass yet; the mutant cases must still fail as planted.
 
     The test gets one more parameter, ``driver`` or ``mutant-<name>``. Under a
     mutant, the test must raise ``AssertionError`` (an assertion of the test, or
@@ -604,7 +648,7 @@ def kills(*names: str):
         wrapper.__signature__ = signature.replace(
             parameters=[*signature.parameters.values(), *extra]
         )
-        cases = [pytest.param(None, id="driver")] + [
+        cases = [pytest.param(None, id="driver", marks=driver_marks)] + [
             pytest.param(n, id=f"mutant-{n}") for n in names
         ]
         return pytest.mark.parametrize("mutant", cases)(wrapper)

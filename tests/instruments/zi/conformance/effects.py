@@ -38,11 +38,13 @@ from typing import Any
 
 import numpy as np
 import pytest
+from laboneq.core.utilities.pulse_sampler import sample_pulse
 from laboneq.dsl.experiment import (
     Acquire,
     AcquireLoopRt,
     Delay,
     PlayPulse,
+    PulseFunctional,
     PulseSampled,
     Section,
     Sweep,
@@ -322,13 +324,43 @@ class Capture:
         return 0.0 if phase is None else phase
 
     def samples(self, op: Op) -> np.ndarray:
-        """Complex samples of the played or integration pulse, before amplitude."""
+        """Complex samples of the played or integration pulse, before amplitude.
+
+        A functional pulse is sampled as LabOne Q samples it (``sample_pulse``), at
+        the length of the operation (else of the pulse), with the pulse parameters of
+        the pulse and of the operation; a swept length has no single set of samples.
+        """
         pulse = op.op.kernel if isinstance(op.op, Acquire) else op.op.pulse
+        if isinstance(pulse, PulseFunctional):
+            return self._functional_samples(op, pulse)
         _require(isinstance(pulse, PulseSampled), f"{type(pulse).__name__} not sampled")
         samples = np.asarray(pulse.samples)
         if samples.ndim == 2:  # [i, q] rows
             samples = samples[0] + 1j * samples[1]
         return samples.astype(complex)
+
+    def _functional_samples(self, op: Op, pulse: PulseFunctional) -> np.ndarray:
+        length = getattr(op.op, "length", None)
+        length = pulse.length if length is None else length
+        _require(
+            length is not None and not hasattr(length, "uid"),
+            f"{pulse.function}: swept or missing length, no single set of samples",
+        )
+        parameters = dict(pulse.pulse_parameters or {})
+        parameters.update(getattr(op.op, "pulse_parameters", None) or {})
+        sampled = sample_pulse(
+            signal_type="iq",
+            sampling_rate=self.controller.sampling_rate / NS,
+            length=length,
+            amplitude=1.0,
+            pulse_function=pulse.function,
+            pulse_parameters=parameters,
+        )
+        if isinstance(sampled, dict):  # laboneq 26.4: i and q rows
+            return np.asarray(sampled["samples_i"]) + 1j * np.asarray(
+                sampled.get("samples_q", 0.0)
+            )
+        return np.asarray(sampled, dtype=complex)  # laboneq 26.10: complex
 
     def waveform(self, op: Op) -> np.ndarray:
         """Complex waveform played: amplitude x samples x exp(i phase).

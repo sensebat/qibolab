@@ -6,7 +6,7 @@ One effect, observed at the LabOne Q boundary: a pulse of amplitude 0.3 on
 planted bugs that send the pulse elsewhere (must fail).
 
 Also checks that the ``effects`` field of :data:`features.FEATURES` matches the
-``feature`` markers of the effect tests.
+``feature`` markers of the effect tests (the files of ``conftest.EFFECT_FILES``).
 
 Pattern: zhinst/laboneq-applications v26.4.0 tests/helpers/dsl.py (assert on the DSL
 experiment handed to LabOne Q, by signal); mutation testing (mutmut, cosmic-ray).
@@ -21,6 +21,7 @@ from qibolab._core.pulses import Delay
 from qibolab._core.sequence import PulseSequence
 
 from . import effects
+from .conftest import EFFECT_FILES
 from .effects import square
 from .features import FEATURES
 from .mutants import kills
@@ -72,7 +73,9 @@ def test_features_list_their_effect_tests():
     Pattern: none harvested; a bookkeeping check of features.py, not an effect test.
     """
     marked = {}
-    for path in sorted(Path(__file__).parent.glob("test_effects_*.py")):
+    here = Path(__file__).parent
+    paths = {path for pattern in EFFECT_FILES for path in here.glob(pattern)}
+    for path in sorted(paths):
         module = importlib.import_module(f"{__package__}.{path.stem}")
         for name, test in vars(module).items():
             if name.startswith("test_") and callable(test):
