@@ -374,9 +374,9 @@ class ZiController(Controller):
     ) -> dict[PulseId, Result]:
         """Execute the sequences in a single LabOne Q experiment.
 
-        Each sequence is followed by the relaxation time. Sweeps of the frequency of
-        a hardware-modulated channel (drive) run in real time, inside the acquisition
-        loop; all the others run in near time, around it. Only
+        Each sequence is followed by the relaxation time. Real-time sweeps run inside
+        the acquisition loop, near-time ones around it; see :func:`.sweep._group`
+        for which is which. Only
         :attr:`AcquisitionType.INTEGRATION` is supported, with cyclic or single-shot
         averaging.
         """

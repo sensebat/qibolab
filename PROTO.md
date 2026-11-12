@@ -92,6 +92,23 @@ Real time vs near time after this branch: frequency of a hardware-modulated chan
 | G4 / X04: two probe waveforms or amplitudes on one probe signal in one real-time loop | SHFQA limit. Refuse before compiling, naming the qubit and the two pulses. | refused by LabOne Q in both versions |
 | F45: fast reset | After each readout: `with match(handle=...)`, `case(state=0)` empty, `case(state=1)` plays the reset pulse on the qubit drive. Works with INTEGRATION and DISCRIMINATION (threshold set). The controller does not know the natives: add a `ZiController` field mapping each acquisition channel to `(drive channel, pulse)`; refuse fast reset for a channel without it. | OK (emulation; feedback latency not modelled) |
 
+## sweeps: done and not done
+
+Branch `orkun/proto-sweeps`, offline emulation only (laboneq 26.4.0 and 26.10.1). Tests: `tests/instruments/zi/proto/test_sweeps.py`.
+
+Done: G1 (amplitude given `Readout.probe`), F06, F07, F09, X23 (duration of pulses and delays, also interpolated), F08 (duration of flux pulses), F10 (relative phase), F11 (virtual Z phase), F12 (DC offset, near time, absolute), F13 / G2 / X20 (mixed group runs in near time), X06 (clear error), G6 for drive and flux pulses (functional envelope: 41.3 ns compiles to 83 samples).
+
+Overlap with `orkun/proto-pulses`: F08 and F11 need a plain flux play (F28) and a plain VirtualZ play (F27), added here as one `elif` each in `zi/pulse.py`. On a DC channel LabOne Q plays the real part of the functional envelope (26.4.0 compiled waveforms: Q wave all zero for a DRAG envelope). Keep one version of each at merge.
+
+Answered here: probe pulses played with the functional envelope compile with one waveform per probe signal (fixed, and with a near-time amplitude sweep). A real-time length sweep of a probe is refused by LabOne Q ("Too many unique pulses on signal").
+
+## sweeps: not done
+
+- F04, F05 in real time: drive and flux amplitude still run in near time (they work). Moving them needs the channel of each swept pulse in `sweep.split`, which only sees the sweepers; not in this round's list.
+- G6 for probes: probes keep `sampled_pulse`, so a fractional probe duration is still rounded down. The functional envelope would work for probes (see above); not switched, to leave the probe path to `orkun/proto-acquisition`.
+- Duration and relative phase sweeps of a probe: refused with a clear error. A near-time length sweep of a probe is not tried.
+- Sweeps given an `Acquisition` (not a `Readout`): not handled; `Acquisition` is refused anyway until F25.
+
 ## Version notes
 
 - `pulse_library.sampled_pulse_complex` and `sampled_pulse_real` are gone in 26.10.1. Use `sampled_pulse` (both versions).
