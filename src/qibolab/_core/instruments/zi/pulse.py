@@ -492,10 +492,14 @@ def kernel(
     > threshold``; LabOne Q assigns state 0 when the integrated result is above its
     threshold (2-state assignment vector of its multistate setup).
 
-    LabOne Q uploads the conjugate of a kernel as the weights
-    (``controller/devices/qachannel.py``), so the kernel is ``conj(w)``. That the
-    SHFQA integrates ``sum(w * s)`` (``zhinst.utils.shfqa.multistate``,
-    ``weighted_integration``) is not checked on hardware.
+    The kernel given to LabOne Q is ``w`` as it is: LabOne Q integrates
+    ``sum(kernel * s)`` over the trace ``s`` its RAW acquisition returns, the
+    convention of ``laboneq.analysis.calculate_integration_kernels`` (the conjugate
+    of the difference of the state traces, used directly as kernel), which is also
+    how qibocal computes ``w`` from qibolab RAW traces. In the compiled artifacts
+    the kernel wave is ``conj(w)`` times the oscillator; the controller conjugates
+    it again on upload (``controller/devices/qachannel.py``). Not checked on
+    hardware.
 
     Different kernels on one acquisition signal would set up more than 2 states, so
     equal ones must be the same object.
@@ -506,7 +510,7 @@ def kernel(
     w = np.ones(n, dtype=complex) if weights is None else np.array(weights)
     if iq_angle is not None:
         w = -np.exp(1j * iq_angle) * w
-    return pulse_library.sampled_pulse(np.conj(w))
+    return pulse_library.sampled_pulse(w)
 
 
 Slots = dict[ChannelId, list[tuple]]

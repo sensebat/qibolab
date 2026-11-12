@@ -241,7 +241,7 @@ def test_offset_split(channels, configs):  # noqa: F811
     assert real == [] and axes == [0, None]
     assert [calib[id].voltage_offset for id in ids] == near[0]
     assert near[0][0].values == pytest.approx(OFFSETS)
-    with pytest.raises(TypeError, match="q0/drive"):
+    with pytest.raises(ValueError, match="q0/drive"):
         offset = Sweeper(
             parameter=Parameter.offset, values=OFFSETS, channels=["q0/drive"]
         )
@@ -358,7 +358,7 @@ def test_frequency_not_iq(channels, configs, id):  # noqa: F811
     frequency = Sweeper(
         parameter=Parameter.frequency, values=np.array([1.0, 2.0]), channels=[id]
     )
-    with pytest.raises(TypeError, match=id):
+    with pytest.raises(ValueError, match=id):
         split([[frequency]], channels, configs, calib, {})
 
 

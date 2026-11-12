@@ -118,13 +118,10 @@ def test_discrimination(connected, configs, averaging_mode):  # noqa: F811
 
 
 def test_discrimination_kernel_threshold(connected, configs, monkeypatch):  # noqa: F811
-    """LabOne Q gets the opposite threshold and the kernel ``-exp(-1j * iq_angle)``.
+    """LabOne Q gets the opposite threshold and the kernel ``-exp(1j * iq_angle)``.
 
     LabOne Q assigns state 0 above its threshold, qibolab state 1 above
     ``threshold`` after rotating by ``iq_angle`` (see :func:`zi.pulse.kernel`).
-    The kernel is the conjugate of the weights ``-exp(1j * iq_angle)``, since LabOne
-    Q uploads the conjugate of a kernel (merge into orkun/proto-features: one
-    convention with the kernels of orkun/proto-pulses).
     """
     experiments = compiled(connected, monkeypatch)
     opts = options(AveragingMode.SINGLESHOT).model_copy(
@@ -137,7 +134,7 @@ def test_discrimination_kernel_threshold(connected, configs, monkeypatch):  # no
     (acquire,) = operations(experiment, Acquire)
     samples = acquire.kernel.samples
     assert len(samples) == 2000
-    np.testing.assert_allclose(samples, -np.exp(-0.7j))
+    np.testing.assert_allclose(samples, -np.exp(0.7j))
 
 
 def test_discrimination_needs_threshold(connected, configs):  # noqa: F811

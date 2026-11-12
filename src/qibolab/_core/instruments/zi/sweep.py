@@ -3,7 +3,13 @@
 import numpy as np
 from laboneq.simple import Calibration, ModulationType, SweepParameter
 
-from qibolab._core.components import Channel, Config, DcChannel, IqChannel
+from qibolab._core.components import (
+    AcquisitionChannel,
+    Channel,
+    Config,
+    DcChannel,
+    IqChannel,
+)
 from qibolab._core.identifier import ChannelId
 from qibolab._core.pulses import PulseId
 from qibolab._core.sweeper import ParallelSweepers, Parameter
@@ -62,8 +68,19 @@ def _group(
     for sweeper in group:
         if sweeper.parameter is Parameter.frequency:
             for id in sweeper.channels:
-                if not isinstance(channels[id], IqChannel):
-                    raise TypeError(f"Cannot sweep the frequency of '{id}', not IQ.")
+                channel = channels[id]
+                # ValueError, as for the other channel checks of the driver
+                if isinstance(channel, AcquisitionChannel):
+                    raise ValueError(  # noqa: TRY004
+                        f"Cannot sweep the frequency of the acquisition channel "
+                        f"'{id}': sweep the frequency of its probe channel "
+                        f"'{channel.probe}'."
+                    )
+                if not isinstance(channel, IqChannel):
+                    raise ValueError(  # noqa: TRY004
+                        f"Cannot sweep the frequency of '{id}': it is not an IQ "
+                        "channel."
+                    )
                 oscillator = calibration[id].oscillator
                 lo = configs[channels[id].lo].frequency
                 oscillator.frequency = SweepParameter(values=sweeper.values - lo)
@@ -72,7 +89,9 @@ def _group(
         elif sweeper.parameter is Parameter.offset:
             for id in sweeper.channels:
                 if not isinstance(channels[id], DcChannel):
-                    raise TypeError(f"Cannot sweep the offset of '{id}', not DC.")
+                    raise ValueError(  # noqa: TRY004
+                        f"Cannot sweep the offset of '{id}': it is not a DC channel."
+                    )
                 calib = calibration[id]
                 calib.voltage_offset = SweepParameter(values=sweeper.values)
                 parameters.append(calib.voltage_offset)

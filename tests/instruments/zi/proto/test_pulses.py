@@ -456,10 +456,13 @@ def kernel_weights(compiled) -> np.ndarray:
 
 
 def test_kernel(connected, compiled, configs):  # noqa: F811
-    """The weights are the unit ones (oscillator only) times the kernel (F41).
+    """The compiled kernel wave is the unit one (oscillator only) times the
+    conjugate of the config kernel (F41).
 
-    The kernel is used as given, as qibocal computes it: LabOne Q conjugates
-    kernels, so the driver passes the conjugate.
+    The driver passes the config kernel as it is (see :func:`zi.pulse.kernel`); the
+    compiled wave is its conjugate, which the LabOne Q controller conjugates again on
+    upload. Before the merge into orkun/proto-features the driver passed the
+    conjugate, and this test expected ``kernel * unit``.
     """
     sequence = PulseSequence([readout()])
     run(connected, configs, [sequence])
@@ -468,7 +471,7 @@ def test_kernel(connected, compiled, configs):  # noqa: F811
     config = configs["q0/acquisition"]
     configs["q0/acquisition"] = config.model_copy(update={"kernel": kernel})
     run(connected, configs, [sequence, PulseSequence([readout()])])
-    assert kernel_weights(compiled) == pytest.approx(kernel * unit, abs=1e-9)
+    assert kernel_weights(compiled) == pytest.approx(np.conj(kernel) * unit, abs=1e-9)
 
 
 def test_kernel_length(connected, configs):  # noqa: F811
