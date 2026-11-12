@@ -26,6 +26,7 @@ from qibolab._core.pulses import (
     Readout,
     Rectangular,
     Snz,
+    VirtualZ,
 )
 from qibolab._core.sequence import PulseSequence
 from qibolab._core.sweeper import Parameter, Sweeper
@@ -177,3 +178,39 @@ def test_flux_phase_refused(connected, configs):  # noqa: F811
     )
     with pytest.raises(ValueError, match="no phase"):
         run(connected, configs, [PulseSequence([("q0/flux", flux), readout()])])
+
+
+def drive_output(controller, configs, compiled, ops):  # noqa: F811
+    """Drive output of ``q0`` for the operations ``ops`` on its drive channel."""
+    duration = sum(op.duration for op in ops)
+    sequence = PulseSequence(
+        [("q0/drive", op) for op in ops]
+        + [("q0/acquisition", Delay(duration=duration)), readout()]
+    )
+    run(controller, configs, [sequence])
+    return wave(controller, compiled[-1], "q0/drive")
+
+
+@pytest.mark.parametrize("phase", [np.pi / 2, -0.3])
+def test_virtual_z(connected, compiled, configs, phase):  # noqa: F811
+    """A VirtualZ adds its phase to the following pulses.
+
+    It is checked against the relative phase of the pulse (X24, already supported):
+    VirtualZ(phase) then a pulse plays as the pulse with ``relative_phase=phase``,
+    which is the qibolab meaning in qm (``frame_rotation_2pi``) and qblox
+    (``set_ph_delta``).
+    """
+    pulse = Pulse(duration=40, amplitude=0.5, envelope=Rectangular())
+    shifted = pulse.model_copy(update={"relative_phase": phase})
+    time, expected = drive_output(connected, configs, compiled, [pulse, shifted])
+    _, rotated = drive_output(
+        connected, configs, compiled, [pulse.new(), VirtualZ(phase=phase), pulse.new()]
+    )
+    assert rotated[:160] == pytest.approx(expected[:160], abs=1e-6)
+    assert not rotated[80:160] == pytest.approx(rotated[:80], abs=1e-3)
+    assert segments(time, rotated)[0] == (0, 80)  # no time taken
+
+
+def test_virtual_z_alone(connected, configs):  # noqa: F811
+    sequence = PulseSequence([("q0/drive", VirtualZ(phase=0.1)), readout()])
+    run(connected, configs, [sequence])

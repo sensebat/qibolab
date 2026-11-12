@@ -13,6 +13,7 @@ from qibolab._core.pulses import (
     PulseLike,
     Readout,
     Rectangular,
+    VirtualZ,
 )
 from qibolab._core.sequence import PulseSequence
 
@@ -64,7 +65,8 @@ def play(
     """Add the operations of ``sequence`` to the current section of ``experiment``.
 
     Pulses play on IQ channels and, with real samples, on DC channels (flux and
-    coupler lines). A :class:`Readout` plays its probe pulse and acquires at the same time, integrating
+    coupler lines). A :class:`VirtualZ` increments the phase of the channel's
+    oscillator by its phase. A :class:`Readout` plays its probe pulse and acquires at the same time, integrating
     with unit weights (custom kernels are not supported). A delay on an acquisition
     channel also delays its probe channel, to keep them aligned. Swept amplitudes are
     taken from ``amplitudes``, by the id of the pulse or of its readout. Durations
@@ -92,6 +94,8 @@ def play(
                 pulse=waveform(op.envelope, op.duration, sampling_rate, real=True),
                 amplitude=amplitudes.get(op.id, op.amplitude),
             )
+        elif isinstance(op, VirtualZ) and isinstance(channel, IqChannel):
+            experiment.play(id, pulse=None, increment_oscillator_phase=op.phase)
         elif isinstance(op, Readout) and configs[id].kernel is None:
             experiment.play(
                 probe,
