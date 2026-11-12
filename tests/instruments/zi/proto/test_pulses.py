@@ -9,13 +9,26 @@ import pytest
 
 pytest.importorskip("laboneq")
 
+from laboneq.simulator.output_simulator import OutputSimulator
+
+from qibolab._core.components import DcChannel
 from qibolab._core.execution_parameters import (
     AcquisitionType,
     AveragingMode,
     ExecutionParameters,
 )
-from qibolab._core.pulses import Delay, Pulse, Readout, Rectangular
+from qibolab._core.instruments.zi import ZiDcConfig
+from qibolab._core.pulses import (
+    Custom,
+    Delay,
+    Exponential,
+    Pulse,
+    Readout,
+    Rectangular,
+    Snz,
+)
 from qibolab._core.sequence import PulseSequence
+from qibolab._core.sweeper import Parameter, Sweeper
 
 from ..test_calibration import channels, configs  # noqa: F401
 
@@ -28,6 +41,8 @@ OPTIONS = ExecutionParameters(
 
 PROBE = Pulse(duration=1000, amplitude=0.1, envelope=Rectangular())
 
+NS = 1e-9
+
 
 @pytest.fixture
 def connected(controller, channels):  # noqa: F811
@@ -35,6 +50,37 @@ def connected(controller, channels):  # noqa: F811
     controller.connect()
     yield controller
     controller.disconnect()
+
+
+@pytest.fixture
+def compiled(connected):
+    """Compiled experiment of each call to ``connected.play``."""
+    out = []
+    compile = connected.session.compile
+
+    def spy(experiment, *args, **kwargs):
+        out.append(compile(experiment, *args, **kwargs))
+        return out[-1]
+
+    connected.session.compile = spy
+    return out
+
+
+def wave(controller, compiled, id, length=2e-6):
+    """Simulated output of channel ``id`` in the first ``length`` s, times in ns."""
+    channel = controller.session.device_setup.logical_signal_by_uid(id)
+    snippet = OutputSimulator(compiled).get_snippet(
+        channel.physical_channel, start=0, output_length=length
+    )
+    return np.round(snippet.time / NS, 3), snippet.wave
+
+
+def segments(time, wave) -> list[tuple[float, float]]:
+    """Start and end in ns of each run of non-zero output."""
+    on = np.concatenate([[False], np.abs(wave) > 1e-6, [False]])
+    edges = np.flatnonzero(np.diff(on.astype(int)))
+    step = time[1] - time[0]
+    return [(time[a], time[b - 1] + step) for a, b in zip(edges[::2], edges[1::2])]
 
 
 def readout(qubit: int = 0, probe: Pulse = PROBE) -> tuple[str, Readout]:
@@ -68,3 +114,66 @@ def test_half_ns_duration(connected, configs):  # noqa: F811
     """41.5 ns is 83 samples at 2 GSps."""
     drive = Pulse(duration=41.5, amplitude=0.5, envelope=Rectangular())
     run(connected, configs, [PulseSequence([("q0/drive", drive), readout()])])
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        Rectangular(),
+        Exponential(tau=0.2, upsilon=0.5),
+        Snz(t_idling=40),
+        Custom(i_=np.linspace(0, 1, 200), q_=np.zeros(200)),
+    ],
+)
+def test_flux_pulse(connected, compiled, configs, envelope):  # noqa: F811
+    """The flux pulse plays its real samples on the HDAWG, 40 ns after the start."""
+    flux = Pulse(duration=100, amplitude=0.4, envelope=envelope)
+    sequence = PulseSequence(
+        [
+            ("q0/flux", Delay(duration=40)),
+            ("q0/flux", flux),
+            ("q0/acquisition", Delay(duration=140)),
+            readout(),
+        ]
+    )
+    run(connected, configs, [sequence])
+    time, out = wave(connected, compiled[-1], "q0/flux")
+    start = np.searchsorted(time, 40)
+    assert np.all(out[:start] == 0)
+    assert out[start : start + 200] == pytest.approx(0.4 * envelope.i(200), abs=1e-6)
+    assert np.all(out[start + 200 : start + 2000] == 0)
+
+
+def test_flux_amplitude_sweep(connected, configs):  # noqa: F811
+    flux = Pulse(duration=100, amplitude=0.4, envelope=Rectangular())
+    sequence = PulseSequence(
+        [("q0/flux", flux), ("q0/acquisition", Delay(duration=100)), readout()]
+    )
+    sweeper = Sweeper(
+        parameter=Parameter.amplitude, values=np.array([0.1, 0.2, 0.3]), pulses=[flux]
+    )
+    run(connected, configs, [sequence], [[sweeper]])
+
+
+def test_coupler_pulse(controller, channels, configs):  # noqa: F811
+    """A coupler flux line is a DC channel on a free HDAWG port."""
+    channels["c01/flux"] = DcChannel(device="hdawg", path="7")
+    configs["c01/flux"] = ZiDcConfig(offset=0.0, power_range=5)
+    controller.channels = channels
+    controller.connect()
+    try:
+        flux = Pulse(duration=60, amplitude=0.3, envelope=Rectangular())
+        sequence = PulseSequence(
+            [("c01/flux", flux), ("q0/acquisition", Delay(duration=60)), readout()]
+        )
+        run(controller, configs, [sequence])
+    finally:
+        controller.disconnect()
+
+
+def test_flux_phase_refused(connected, configs):  # noqa: F811
+    flux = Pulse(
+        duration=100, amplitude=0.4, envelope=Rectangular(), relative_phase=0.1
+    )
+    with pytest.raises(ValueError, match="no phase"):
+        run(connected, configs, [PulseSequence([("q0/flux", flux), readout()])])

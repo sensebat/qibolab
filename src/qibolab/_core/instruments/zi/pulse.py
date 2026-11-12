@@ -4,7 +4,7 @@ from functools import cache
 
 from laboneq.simple import Experiment, pulse_library
 
-from qibolab._core.components import Channel, Config, IqChannel
+from qibolab._core.components import Channel, Config, DcChannel, IqChannel
 from qibolab._core.identifier import ChannelId
 from qibolab._core.pulses import (
     Delay,
@@ -40,14 +40,17 @@ def samples(id: ChannelId, op: PulseLike, sampling_rate: float) -> None:
 
 
 @cache
-def waveform(envelope: Envelope, duration: float, sampling_rate: float):
+def waveform(
+    envelope: Envelope, duration: float, sampling_rate: float, real: bool = False
+):
     """Unit-amplitude LabOne Q pulse with the samples of a qibolab envelope.
 
     Equal envelopes give the same object, since an SHFQA output can only hold one
-    waveform.
+    waveform. With ``real``, for a DC channel, only the i component is kept.
     """
-    samples = round(duration * sampling_rate)
-    return pulse_library.sampled_pulse(envelope.i(samples) + 1j * envelope.q(samples))
+    n = round(duration * sampling_rate)
+    samples = envelope.i(n) if real else envelope.i(n) + 1j * envelope.q(n)
+    return pulse_library.sampled_pulse(samples)
 
 
 def play(
@@ -60,7 +63,8 @@ def play(
 ) -> None:
     """Add the operations of ``sequence`` to the current section of ``experiment``.
 
-    A :class:`Readout` plays its probe pulse and acquires at the same time, integrating
+    Pulses play on IQ channels and, with real samples, on DC channels (flux and
+    coupler lines). A :class:`Readout` plays its probe pulse and acquires at the same time, integrating
     with unit weights (custom kernels are not supported). A delay on an acquisition
     channel also delays its probe channel, to keep them aligned. Swept amplitudes are
     taken from ``amplitudes``, by the id of the pulse or of its readout. Durations
@@ -79,6 +83,14 @@ def play(
                 pulse=waveform(op.envelope, op.duration, sampling_rate),
                 amplitude=amplitudes.get(op.id, op.amplitude),
                 phase=op.relative_phase,
+            )
+        elif isinstance(op, Pulse) and isinstance(channel, DcChannel):
+            if op.relative_phase != 0:
+                raise ValueError(f"A pulse on the DC channel '{id}' has no phase.")
+            experiment.play(
+                id,
+                pulse=waveform(op.envelope, op.duration, sampling_rate, real=True),
+                amplitude=amplitudes.get(op.id, op.amplitude),
             )
         elif isinstance(op, Readout) and configs[id].kernel is None:
             experiment.play(
