@@ -30,6 +30,11 @@ from .test_conformance import mz
 @pytest.mark.feature("F24")
 @kills("pulse_on_wrong_channel", "drive_signal_misrouted")
 def test_drive_amplitude_reaches_drive_port(platform):
+    """A pulse of amplitude 0.3 on q0/drive plays amplitude 0.3 on q0's drive port.
+
+    Pattern: zhinst/laboneq-applications v26.4.0 tests/helpers/dsl.py (assert on the
+    DSL experiment, per signal).
+    """
     sequence = PulseSequence(
         [
             ("q0/drive", square(amplitude=0.3)),
@@ -62,7 +67,10 @@ def _features(test) -> set[str]:
 
 def test_features_list_their_effect_tests():
     """``FEATURES[...]["effects"]`` lists exactly the effect tests marked with the
-    feature, so the report shows which features have effect tests."""
+    feature, so the report shows which features have effect tests.
+
+    Pattern: none harvested; a bookkeeping check of features.py, not an effect test.
+    """
     marked = {}
     for path in sorted(Path(__file__).parent.glob("test_effects_*.py")):
         module = importlib.import_module(f"{__package__}.{path.stem}")

@@ -354,13 +354,13 @@ def what_ran(run: Run) -> str:
             if cases is None:
                 tds.append("<td class=muted>-</td>")
                 continue
-            mine = [c for c in cases if kind(c) == key]
+            of_kind = [c for c in cases if kind(c) == key]
             if key == "planted bug":
-                hit, total = caught(mine)
+                hit, total = caught(of_kind)
                 css = "o-passed" if hit == total else "o-failed"
                 tds.append(f"<td class={css}>{hit} of {total} red</td>" if total else "<td class=muted>none</td>")
             else:
-                tds.append(f"<td>{counts_line(mine)}</td>")
+                tds.append(f"<td>{counts_line(of_kind)}</td>")
         body.append(f"<tr><th scope=row>{esc(title)}<div class='small muted'>{esc(what)}</div></th>{''.join(tds)}</tr>")
     head = "".join(cell_head(run, cid) for cid in CELL_IDS)
     return (

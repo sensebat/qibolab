@@ -93,6 +93,8 @@ def labeled(platform):
 
 def _axis_of(names, parameter):
     """LabOne Q results axis that runs ``parameter``."""
+    if not hasattr(parameter, "uid"):
+        raise effects.Missing(f"{parameter!r} is not swept.")
     for m, name in enumerate(names):
         if parameter.uid == name or parameter.uid in np.atleast_1d(name):
             return m
