@@ -3,9 +3,16 @@
 import re
 from contextlib import ExitStack
 from dataclasses import dataclass
+from functools import reduce
 from typing import Literal
 
 import laboneq.simple as lq
+import numpy as np
+from laboneq.dsl.calibration import (
+    ExponentialCompensation,
+    FIRCompensation,
+    Precompensation,
+)
 from laboneq.dsl.device import DeviceSetup, create_connection
 from laboneq.dsl.device.instruments import HDAWG, PQSC, SHFQA, SHFSG
 from laboneq.simple import (
@@ -24,8 +31,11 @@ from qibolab._core.components import (
     Channel,
     Config,
     DcChannel,
+    ExponentialFilter,
+    FiniteImpulseResponseFilter,
     IqChannel,
 )
+from qibolab._core.components.filters import Filter
 from qibolab._core.execution_parameters import (
     AcquisitionType,
     AveragingMode,
@@ -211,16 +221,46 @@ def signals(
     return sorted(used | probes | dc)
 
 
+def precompensation(
+    filters: list[Filter], sampling_rate: float
+) -> Precompensation | None:
+    """HDAWG precompensation implementing the qibolab filters of a DC channel.
+
+    An :class:`ExponentialFilter` becomes an exponential compensation, its ``tau`` in
+    samples converted to s at ``sampling_rate`` (GSps). The coefficients of all the
+    :class:`FiniteImpulseResponseFilter` are convolved into one FIR compensation.
+    The instrument needs the ``PC`` option.
+    """
+    if len(filters) == 0:
+        return None
+    exponential = [
+        ExponentialCompensation(
+            timeconstant=f.tau / sampling_rate * pulse.NS, amplitude=f.amplitude
+        )
+        for f in filters
+        if isinstance(f, ExponentialFilter)
+    ]
+    fir = [
+        f.coefficients for f in filters if isinstance(f, FiniteImpulseResponseFilter)
+    ]
+    return Precompensation(
+        exponential=exponential or None,
+        FIR=FIRCompensation(coefficients=reduce(np.convolve, fir)) if fir else None,
+    )
+
+
 def calibration(
     ids: list[ChannelId],
     channels: dict[ChannelId, Channel],
     instruments: dict[str, ZiInstrument],
     configs: dict[str, Config],
+    sampling_rate: float = SAMPLING_RATE,
 ) -> Calibration:
     """Build the LabOne Q calibration of the channels ``ids`` from their configs.
 
     Channels with the same LO name share the LO. An acquisition channel shares the
-    oscillator of its probe channel, which is software-modulated.
+    oscillator of its probe channel, which is software-modulated. Filters of a DC
+    channel become its precompensation, see :func:`precompensation`.
     """
     los: dict[str, Oscillator] = {}
     oscillators: dict[ChannelId, Oscillator] = {}
@@ -247,10 +287,10 @@ def calibration(
     for id in ids:
         channel, config = channels[id], configs[id]
         if isinstance(channel, DcChannel):
-            if len(config.filters) > 0:
-                raise NotImplementedError(f"Filters on '{id}' are not supported.")
             calib[id] = SignalCalibration(
-                voltage_offset=config.offset, range=config.power_range
+                voltage_offset=config.offset,
+                range=config.power_range,
+                precompensation=precompensation(config.filters, sampling_rate),
             )
         elif isinstance(channel, AcquisitionChannel):
             calib[id] = SignalCalibration(
@@ -388,10 +428,21 @@ class ZiController(Controller):
             raise NotImplementedError("Fast reset is not supported.")
 
         ids = signals(self.channels, sequences)
-        calib = calibration(ids, self.channels, self.instruments, configs)
+        calib = calibration(
+            ids, self.channels, self.instruments, configs, self.sampling_rate
+        )
         experiment = self._experiment(ids, calib)
         swept: sweep.Swept = {}
-        near, real, axes = sweep.split(sweepers, self.channels, configs, calib, swept)
+        slots: pulse.Slots = {}
+        near, real, axes = sweep.split(
+            sweepers, self.channels, configs, calib, swept, self.sampling_rate
+        )
+        windows = pulse.windows(sequences, self.channels)
+        layouts = [
+            pulse.layout(sequence, self.channels, self.sampling_rate, windows, swept)
+            for sequence in sequences
+        ]
+        pulse.check_lines(layouts, self.channels)
         with ExitStack() as stack:
             for group in near:
                 stack.enter_context(experiment.sweep(parameter=group))
@@ -404,20 +455,19 @@ class ZiController(Controller):
             )
             for group in real:
                 stack.enter_context(experiment.sweep(parameter=group))
-            for sequence in sequences:
+            for blocks in layouts:
                 with experiment.section():
-                    for id in ids:
-                        experiment.reserve(id)
                     pulse.play(
                         experiment,
-                        sequence,
+                        blocks,
                         self.channels,
                         configs,
                         self.sampling_rate,
                         swept,
+                        slots,
                     )
                 with experiment.section():
-                    for id in ids:
+                    for id in experiment.signals:
                         experiment.delay(id, time=options.relaxation_time * pulse.NS)
 
         data = self.session.run(self.session.compile(experiment))

@@ -10,6 +10,7 @@ import pytest
 
 pytest.importorskip("laboneq")
 
+from laboneq.dsl.experiment import Section
 from laboneq.simple import Calibration, Experiment, ExperimentSignal, SweepParameter
 
 from qibolab._core.execution_parameters import AveragingMode
@@ -30,11 +31,20 @@ AVERAGING = [AveragingMode.CYCLIC, AveragingMode.SINGLESHOT]
 def operations(sequence, channels, configs, swept):  # noqa: F811
     """LabOne Q operations played for ``sequence``, by signal."""
     experiment = Experiment(signals=[ExperimentSignal(id) for id in channels])
+    windows = zipulse.windows([sequence], channels)
+    blocks = zipulse.layout(sequence, channels, SAMPLING_RATE, windows, swept)
     with experiment.acquire_loop_rt(count=1), experiment.section() as section:
-        zipulse.play(experiment, sequence, channels, configs, SAMPLING_RATE, swept)
+        zipulse.play(experiment, blocks, channels, configs, SAMPLING_RATE, swept, {})
     ops = {}
-    for op in section.children:
-        ops.setdefault(op.signal, []).append(op)
+
+    def collect(node):
+        for child in node.children:
+            if isinstance(child, Section):
+                collect(child)
+            else:
+                ops.setdefault(child.signal, []).append(child)
+
+    collect(section)
     return ops
 
 
@@ -126,10 +136,19 @@ def test_delay_duration(connected, configs, averaging_mode):  # noqa: F811
     run(connected, configs, sequence, [[duration]], averaging_mode)
 
 
-def test_fractional_duration(connected, configs):  # noqa: F811
-    """G6: a drive pulse of 41.3 ns compiles, with the delay that follows it."""
-    sequence = drives([0], duration=41.3)
-    run(connected, configs, sequence, [], AveragingMode.CYCLIC)
+def test_fractional_duration_refused(connected, configs):  # noqa: F811
+    """G6: swept durations must be whole samples, as fixed ones (orkun/proto-pulses).
+
+    On orkun/proto-sweeps a fractional duration played with the functional envelope;
+    the merge keeps the refusal of orkun/proto-pulses for fixed and swept ones.
+    """
+    sequence = drives([0])
+    (_, drive), (_, delay) = list(sequence)[:2]
+    duration = Sweeper(
+        parameter=Parameter.duration, values=np.array([40, 41.3]), pulses=[drive, delay]
+    )
+    with pytest.raises(ValueError, match="whole number of samples"):
+        connected.play(configs, [sequence], options(AveragingMode.CYCLIC), [[duration]])
 
 
 PHASES = np.linspace(0, 2 * np.pi, 5)

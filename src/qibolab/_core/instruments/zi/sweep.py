@@ -1,5 +1,6 @@
 """Conversion of qibolab sweepers to LabOne Q sweep parameters."""
 
+import numpy as np
 from laboneq.simple import Calibration, ModulationType, SweepParameter
 
 from qibolab._core.components import Channel, Config, DcChannel, IqChannel
@@ -34,6 +35,7 @@ def _group(
     configs: dict[str, Config],
     calibration: Calibration,
     swept: Swept,
+    sampling_rate: float | None = None,
 ) -> tuple[list[SweepParameter], bool]:
     """Sweep parameters of one group of parallel sweepers, and their execution type.
 
@@ -52,6 +54,8 @@ def _group(
       phase and the phase of a virtual Z run in real time.
 
     A group that mixes near-time and real-time sweeps runs entirely in near time.
+    Given ``sampling_rate`` (GSps), swept durations must be whole samples, as fixed
+    ones (:func:`.pulse.samples`): LabOne Q would round them.
     """
     parameters = []
     real_time = set()
@@ -75,6 +79,13 @@ def _group(
                 real_time.add(False)
         elif sweeper.parameter in _PULSES:
             name, scale, rt = _PULSES[sweeper.parameter]
+            if name is Parameter.duration and sampling_rate is not None:
+                n = np.asarray(sweeper.values) * sampling_rate
+                if not np.allclose(n, np.round(n), atol=1e-6):
+                    raise ValueError(
+                        f"Swept durations {sweeper.values} ns are not all a whole "
+                        f"number of samples at {sampling_rate} GSps."
+                    )
             for pulse in sweeper.pulses:
                 swept[pulse.id, name] = SweepParameter(values=sweeper.values * scale)
                 parameters.append(swept[pulse.id, name])
@@ -92,6 +103,7 @@ def split(
     configs: dict[str, Config],
     calibration: Calibration,
     swept: Swept,
+    sampling_rate: float | None = None,
 ) -> tuple[list[list[SweepParameter]], list[list[SweepParameter]], Axes]:
     """Split the sweepers in near-time and real-time groups, keeping their order.
 
@@ -107,7 +119,9 @@ def split(
     near_axes: Axes = []
     real_axes: Axes = []
     for index, group in enumerate(sweepers):
-        parameters, real_time = _group(group, channels, configs, calibration, swept)
+        parameters, real_time = _group(
+            group, channels, configs, calibration, swept, sampling_rate
+        )
         if real_time:
             real.append(parameters)
             real_axes.append(index)
