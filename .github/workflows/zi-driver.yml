@@ -1,0 +1,116 @@
+# Offline CI for the Zurich Instruments driver: LabOne Q emulation only, no hardware.
+name: zi-driver
+
+on:
+  push:
+    branches: ["orkun/**", zi_drivers]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      driver_ref:
+        description: "ElStabilini/qibolab ref to test (empty = this commit)"
+        required: false
+        default: ""
+  # Nightly against ElStabilini/qibolab@zi_drivers.
+  # GitHub runs schedules only from the default branch, so this is inert until the
+  # workflow is there.
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+env:
+  # Set when testing another driver commit than this one.
+  DRIVER_REF: ${{ github.event_name == 'schedule' && 'zi_drivers' || inputs.driver_ref }}
+  # uv run must not re-sync the venv, or it would undo the "latest" upgrade.
+  UV_NO_SYNC: "1"
+
+jobs:
+  emulation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        laboneq: [pinned, latest]
+    steps:
+      - name: Check out this commit
+        if: env.DRIVER_REF == ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check out driver ElStabilini/qibolab@${{ env.DRIVER_REF }}
+        if: env.DRIVER_REF != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ElStabilini/qibolab
+          ref: ${{ env.DRIVER_REF }}
+
+      - name: Check out this commit for its conformance suite
+        if: env.DRIVER_REF != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: suite
+
+      - name: Use the conformance suite from this commit
+        if: env.DRIVER_REF != ''
+        run: |
+          mkdir -p tests/instruments/zi
+          cp -R suite/tests/instruments/zi/conformance tests/instruments/zi/
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+
+      - name: Install (laboneq from uv.lock)
+        run: uv sync --group zi --group tests --frozen
+
+      - name: Upgrade to the newest laboneq release
+        if: matrix.laboneq == 'latest'
+        run: uv pip install -U laboneq
+
+      - name: Record versions
+        env:
+          REF_NAME: ${{ github.head_ref || github.ref_name }}
+        run: |
+          echo "DRIVER=${DRIVER_REF:-$REF_NAME}@$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "LABONEQ=$(uv pip show laboneq | sed -n 's/^Version: //p')" >> "$GITHUB_ENV"
+          echo "ZHINST_CORE=$(uv pip show zhinst-core | sed -n 's/^Version: //p')" >> "$GITHUB_ENV"
+
+      - name: Test (laboneq ${{ env.LABONEQ }}, zhinst-core ${{ env.ZHINST_CORE }})
+        id: pytest
+        # -o addopts= drops qibolab's coverage options.
+        run: >-
+          uv run pytest tests/instruments/zi -q -o addopts= -p no:cacheprovider
+          --junitxml=junit-${{ matrix.laboneq }}.xml
+
+      - name: Summary
+        if: always() && steps.pytest.outcome != 'skipped'
+        env:
+          JUNIT: junit-${{ matrix.laboneq }}.xml
+          OUTCOME: ${{ steps.pytest.outcome }}
+        shell: python3 {0}
+        run: |
+          import os, xml.etree.ElementTree as ET
+          cases = list(ET.parse(os.environ["JUNIT"]).iter("testcase"))
+          xfail = sum(any(s.get("type") == "pytest.xfail" for s in c.iter("skipped")) for c in cases)
+          skipped = sum(c.find("skipped") is not None for c in cases) - xfail
+          failed = sum(c.find("failure") is not None or c.find("error") is not None for c in cases)
+          passed = len(cases) - xfail - skipped - failed
+          status = "ok" if os.environ["OUTCOME"] == "success" else "failed"
+          counts = [f"{passed} passed", f"{xfail} not implemented yet", f"{failed} failed"]
+          if skipped:
+              counts.append(f"{skipped} skipped")
+          line = (f"{status}  {' · '.join(counts)} — driver {os.environ['DRIVER']}, "
+                  f"laboneq {os.environ['LABONEQ']} (zhinst-core {os.environ['ZHINST_CORE']})")
+          print(line)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(line + "\n")
+
+      - name: Upload junit
+        if: always() && steps.pytest.outcome != 'skipped'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: junit-${{ matrix.laboneq }}
+          path: junit-${{ matrix.laboneq }}.xml
