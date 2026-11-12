@@ -4,8 +4,8 @@
 # run tests/instruments/zi. Always writes OUT_DIR/meta.json; junit.xml when the tests ran.
 #
 # Usage: ci/run_row.sh DRIVER_DIR SUITE_DIR OUT_DIR
-# Env:   ROW, DRIVER_REPO, DRIVER_REF (labels for the report)
-#        MERGE_URL, MERGE_REF  merge this branch into the driver first (merge-trial)
+# Env:   ROW (short id), ROW_NAME (title on the page), DRIVER_REPO, DRIVER_REF (labels)
+#        MERGE_URL, MERGE_REF  merge this branch into the driver first (upgrade row)
 #        UV_PYTHON             Python for uv (3.13 in CI)
 set -uo pipefail
 
@@ -25,7 +25,7 @@ write_meta() {
 import json, os
 e = os.environ
 meta = {
-    "row": e.get("ROW", ""), "repo": e.get("DRIVER_REPO", ""), "ref": e.get("DRIVER_REF", ""),
+    "row": e.get("ROW", ""), "name": e.get("ROW_NAME", ""), "repo": e.get("DRIVER_REPO", ""), "ref": e.get("DRIVER_REF", ""),
     "sha": e["SHA"], "suite_sha": e["SUITE_SHA"], "stage": e["STAGE"],
     "merged_from": e["MERGED_FROM"], "merged_sha": e["MERGED_SHA"], "merge_note": e["MERGE_NOTE"],
     "conflicts": [f for f in e["CONFLICTS"].splitlines() if f],
@@ -52,6 +52,7 @@ if [ -n "${MERGE_URL:-}" ]; then
     STAGE="merge conflict"
     CONFLICTS=$(git -C "$driver" diff --name-only --diff-filter=U)
     echo "merge conflict in:"; echo "$CONFLICTS"
+    echo "::error::merge conflict: ${MERGED_FROM} does not merge cleanly into ${DRIVER_REF:-the driver}"
     git -C "$driver" merge --abort
     exit 1
   fi
