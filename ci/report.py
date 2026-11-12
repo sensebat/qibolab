@@ -232,14 +232,336 @@ def grid(run: Run) -> str:
     return f"<table class=grid><thead><tr><th></th>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
 
 
+CELL_IDS = [f"{r}-{c}" for r in ROWS for c in COLS]
+
+
+def cell_head(run: Run, cell_id: str) -> str:
+    row, col = cell_id.split("-")
+    which = "pinned" if col == "c1" else "latest"
+    return (
+        f"<th scope=col class=cellhead>{row.upper()} · {which}"
+        f"<div class='small mono'>{esc(col_version(run, col) or '-')}</div></th>"
+    )
+
+
+def ran(run: Run, cell_id: str) -> list[dict] | None:
+    """The cell's test cases, or ``None`` when its tests did not run."""
+    cell = run.cells.get(cell_id)
+    return None if cell is None else cell["cases"]
+
+
+def is_mutant_case(case: dict) -> bool:
+    """A case of an effect test run under a planted driver bug (``[...mutant-<name>]``)."""
+    return "mutant-" in case["name"].partition("[")[2]
+
+
+def kind(case: dict) -> str:
+    """driver test | contract | effect | planted bug."""
+    if not case["conformance"]:
+        return "driver test"
+    if is_mutant_case(case):
+        return "planted bug"
+    return case["props"].get("kind", "contract")
+
+
+def base_name(case: dict) -> str:
+    return case["name"].split("[", 1)[0]
+
+
+# ---------------------------------------------------------------- chips
+
+
+def tally(cases: list[dict]) -> tuple[str, str, str]:
+    """(css, short text, long text) of a group of cases run on the driver."""
+    n = counts(cases)
+    total, failed = len(cases), n["failed"] + n["error"]
+    long = (
+        f"{n['passed']} passed, {n['xfailed']} not implemented yet, {failed} failed"
+        + (f", {n['skipped']} skipped" if n["skipped"] else "")
+    )
+    if failed:
+        return "bad", f"✗ {failed} of {total}", long
+    if n["passed"] == total:
+        return "ok", "✓", long
+    if n["xfailed"] == total:
+        return "warn", "not yet", long
+    if n["passed"]:
+        return "warn", f"✓ {n['passed']} · not yet {n['xfailed']}", long
+    return "none", "skipped", long
+
+
+def caught(mutants: list[dict]) -> tuple[int, int]:
+    """Planted-bug runs that turned the test red (outcome passed), of all."""
+    return sum(c["outcome"] == "passed" for c in mutants), len(mutants)
+
+
+def chip(css: str, label: str, text: str, title: str) -> str:
+    return f"<span class='chip {css}' title='{esc(title)}'><b>{esc(label)}</b> {esc(text)}</span>"
+
+
+def contract_chip(cases: list[dict]) -> str:
+    if not cases:
+        return chip("none", "contract", "-", "no contract test in this cell")
+    css, text, long = tally(cases)
+    return chip(css, "contract", text, f"contract tests: {long}")
+
+
+def effect_chip(cases: list[dict], mutants: list[dict], listed: list[str] | None) -> str:
+    if not cases:
+        if listed == []:
+            return chip("none", "effect", "none yet", "no effect test yet")
+        return chip("none", "effect", "absent", "no effect test ran in this cell")
+    css, text, long = tally(cases)
+    title = f"effect tests: {long}"
+    if mutants:
+        hit, total = caught(mutants)
+        title += f"; planted bugs: {hit} of {total} runs red"
+        if hit < total and css != "bad":
+            css, text = "bad", f"✗ {total - hit} bug{'s' if total - hit > 1 else ''} missed"
+    return chip(css, "effect", text, title)
+
+
+# ---------------------------------------------------------------- what ran
+
+
+def counts_line(cases: list[dict]) -> str:
+    if not cases:
+        return "<span class=muted>none</span>"
+    n = counts(cases)
+    failed = n["failed"] + n["error"]
+    parts = [f"{n['passed']} passed"]
+    if n["xfailed"]:
+        parts.append(f"{n['xfailed']} not yet")
+    if n["skipped"]:
+        parts.append(f"{n['skipped']} skipped")
+    if failed:
+        parts.append(f"<b class=o-failed>{failed} failed</b>")
+    return " · ".join(parts)
+
+
+def what_ran(run: Run) -> str:
+    groups = [
+        ("driver test", "Driver tests", "tests/instruments/zi/*.py at the row's commit"),
+        ("contract", "Contract tests", "conformance suite: keys, shapes, refusals"),
+        ("effect", "Effect tests", "conformance suite: what LabOne Q gets, incl. CP1-CP5 references"),
+        ("planted bug", "Planted-bug runs", "each effect test under the bugs it names; must turn red"),
+    ]
+    body = []
+    for key, title, what in groups:
+        tds = []
+        for cid in CELL_IDS:
+            cases = ran(run, cid)
+            if cases is None:
+                tds.append("<td class=muted>-</td>")
+                continue
+            mine = [c for c in cases if kind(c) == key]
+            if key == "planted bug":
+                hit, total = caught(mine)
+                css = "o-passed" if hit == total else "o-failed"
+                tds.append(f"<td class={css}>{hit} of {total} red</td>" if total else "<td class=muted>none</td>")
+            else:
+                tds.append(f"<td>{counts_line(mine)}</td>")
+        body.append(f"<tr><th scope=row>{esc(title)}<div class='small muted'>{esc(what)}</div></th>{''.join(tds)}</tr>")
+    head = "".join(cell_head(run, cid) for cid in CELL_IDS)
+    return (
+        "<h2>What ran</h2><div class=scroll><table class=counts>"
+        f"<thead><tr><th></th>{head}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
+    )
+
+
+# ---------------------------------------------------------------- effect checks
+
+
+def checkpoint_rank(cp: str) -> tuple[int, str]:
+    return (0, cp) if cp.startswith("CP") else (1, cp)
+
+
+def id_rank(feature_id: str) -> tuple[int, str]:
+    digits = "".join(ch for ch in feature_id if ch.isdigit())
+    return (int(digits) if digits else 0, feature_id)
+
+
+def collect_features(run: Run) -> tuple[dict[str, dict], dict[str, dict[str, list]]]:
+    """Feature infos by id, and per cell the conformance cases of each feature."""
+    features: dict[str, dict] = {}
+    per_cell: dict[str, dict[str, list]] = {cid: {} for cid in CELL_IDS}
+    for cid in CELL_IDS:
+        for case in ran(run, cid) or []:
+            props = case["props"]
+            if not case["conformance"] or not props.get("feature"):
+                continue
+            fid = props["feature"]
+            info = features.setdefault(
+                fid, {"id": fid, "title": props.get("title", ""), "cp": props.get("checkpoint", ""), "effects": None}
+            )
+            if info["effects"] is None and "effects" in props:
+                info["effects"] = props["effects"].split()
+            per_cell[cid].setdefault(fid, []).append(case)
+    return features, per_cell
+
+
+def effect_names(listed: list[str] | None) -> str:
+    if not listed:
+        return ""
+    names = "".join(f"<li>{esc(e)}</li>" for e in listed)
+    n = len(listed)
+    return f"<details><summary>{n} effect test{'s' if n > 1 else ''}</summary><ul class=mono>{names}</ul></details>"
+
+
+def effect_checks(run: Run) -> str:
+    features, per_cell = collect_features(run)
+    if not features:
+        return "<h2>Effect checks</h2><p class=muted>No conformance results.</p>"
+    order = sorted(features, key=lambda f: (checkpoint_rank(features[f]["cp"]), id_rank(f)))
+    green = {cid: 0 for cid in CELL_IDS}
+    body, last_cp = [], None
+    for fid in order:
+        info = features[fid]
+        tds = []
+        for cid in CELL_IDS:
+            if ran(run, cid) is None:
+                tds.append("<td class=muted>-</td>")
+                continue
+            cases = per_cell[cid].get(fid, [])
+            contract = [c for c in cases if kind(c) == "contract"]
+            effect = [c for c in cases if kind(c) == "effect"]
+            mutants = [c for c in cases if kind(c) == "planted bug"]
+            e_chip = effect_chip(effect, mutants, info["effects"])
+            if "chip ok" in e_chip:
+                green[cid] += 1
+            tds.append(f"<td><div class=chips>{contract_chip(contract)}{e_chip}</div></td>")
+        group = " class=group" if last_cp is not None and info["cp"] != last_cp else ""
+        last_cp = info["cp"]
+        body.append(
+            f"<tr{group}><td class='mono id'>{esc(fid)}</td>"
+            f"<td>{esc(info['title'])}{effect_names(info['effects'])}</td>"
+            f"<td class=mono>{esc(info['cp'] or '-')}</td>{''.join(tds)}</tr>"
+        )
+    with_effects = sum(1 for f in features.values() if f["effects"])
+    foot = "".join(
+        f"<td>{green[cid]} of {with_effects}</td>" if ran(run, cid) is not None else "<td class=muted>-</td>"
+        for cid in CELL_IDS
+    )
+    head = "".join(cell_head(run, cid) for cid in CELL_IDS)
+    intro = (
+        f"<p class=muted>One row per qibolab feature that qibocal needs, ordered by the first checkpoint "
+        f"that needs it ({len(features)} features, {with_effects} with effect tests). "
+        "<b>contract</b>: the qibolab interface keeps its promises (keys, shapes, refusals). "
+        "<b>effect</b>: what the qibolab call makes LabOne Q do, read from the experiment the driver "
+        "hands to LabOne Q (amplitudes, frequencies, sweep values, waits, results), and the effect "
+        "tests turn red under each planted driver bug they name "
+        "(tests/instruments/zi/conformance/mutants.py, matrix in TEETH.md).</p>"
+        "<p class='legend small'>"
+        + chip("ok", "", "✓", "")
+        + " all pass "
+        + chip("warn", "", "not yet", "")
+        + " strict expected failure: refused or not implemented yet "
+        + chip("bad", "", "✗", "")
+        + " a test failed or a planted bug went unnoticed "
+        + chip("none", "", "none yet", "")
+        + " no such test. Hover a chip for counts.</p>"
+    )
+    return (
+        f"<h2 id=effects>Effect checks</h2>{intro}<div class=scroll><table class=effects>"
+        f"<thead><tr><th class=id>Id</th><th>Feature</th><th>Checkpoint</th>{head}</tr></thead>"
+        f"<tbody>{''.join(body)}</tbody>"
+        f"<tfoot><tr><td></td><td colspan=2>Features with effect checks green</td>{foot}</tr></tfoot>"
+        "</table></div>"
+    )
+
+
+# ---------------------------------------------------------------- CP1-CP5 references
+
+
+def reference_chip(cases: list[dict]) -> str:
+    driver = [c for c in cases if not is_mutant_case(c)]
+    mutants = [c for c in cases if is_mutant_case(c)]
+    if not driver:
+        return chip("none", "reference", "-", "no reference test in this cell")
+    outcomes = {c["outcome"] for c in driver}
+    message = next((c["message"] for c in driver if c["message"]), "")
+    hit, total = caught(mutants)
+    bugs = f"; planted bugs: {hit} of {total} runs red" if total else ""
+    if outcomes & {"failed", "error"}:
+        return chip("bad", "reference", "changed", (message or "differs from the reference file") + bugs)
+    if outcomes == {"passed"}:
+        if hit < total:
+            return chip("bad", "reference", f"equal, {total - hit} missed", f"equal to the file{bugs}")
+        return chip("ok", "reference", "equal", f"equal to the file{bugs}")
+    return chip("none", "reference", "no file", message or "no reference file for this laboneq version")
+
+
+def references(run: Run) -> str:
+    cps: dict[str, dict] = {}
+    for cid in CELL_IDS:
+        for case in ran(run, cid) or []:
+            cp = case["props"].get("checkpoint", "")
+            if not case["conformance"] or case["props"].get("feature") or not cp.startswith("CP"):
+                continue
+            entry = cps.setdefault(cp, {"titles": [], "cells": {c: {"run": [], "ref": []} for c in CELL_IDS}})
+            if case["file"] == "test_references":
+                entry["cells"][cid]["ref"].append(case)
+            else:
+                title = base_name(case).removeprefix("test_").replace("_", " ")
+                if title not in entry["titles"]:
+                    entry["titles"].append(title)
+                entry["cells"][cid]["run"].append(case)
+    if not cps:
+        return "<h2>CP1-CP5 reference files</h2><p class=muted>No checkpoint results.</p>"
+    body = []
+    for cp in sorted(cps):
+        entry = cps[cp]
+        tds = []
+        for cid in CELL_IDS:
+            if ran(run, cid) is None:
+                tds.append("<td class=muted>-</td>")
+                continue
+            cell = entry["cells"][cid]
+            run_chip = contract_chip(cell["run"]).replace("<b>contract</b>", "<b>checkpoint</b>", 1)
+            tds.append(f"<td><div class=chips>{run_chip}{reference_chip(cell['ref'])}</div></td>")
+        body.append(
+            f"<tr><td class='mono id'>{esc(cp)}</td><td>{esc(', '.join(entry['titles']) or '-')}</td>{''.join(tds)}</tr>"
+        )
+    head = "".join(cell_head(run, cid) for cid in CELL_IDS)
+    intro = (
+        "<p class=muted>Each checkpoint runs the exact qibocal calls on the invented rack. "
+        "<b>checkpoint</b>: the calls succeed and the results have the shapes qibocal reads. "
+        "<b>reference</b>: everything the driver hands to LabOne Q, written in qibolab terms "
+        "(per channel: frequency, LO, offset, range, played amplitudes and phases, waits; sweep values "
+        "and what they drive; results), compared with "
+        "tests/instruments/zi/conformance/references/&lt;laboneq major.minor&gt;/cpN.json. "
+        "<b>equal</b> = no difference; <b>changed</b> = what LabOne Q gets differs (hover for where); "
+        "<b>no file</b> = no reference for this laboneq version.</p>"
+    )
+    return (
+        f"<h2 id=references>CP1-CP5 reference files</h2>{intro}<div class=scroll><table class=effects>"
+        f"<thead><tr><th class=id>Id</th><th>Checkpoint tests</th>{head}</tr></thead>"
+        f"<tbody>{''.join(body)}</tbody></table></div>"
+    )
+
+
+# ---------------------------------------------------------------- failed tests
+
+
 def failed_section(run: Run) -> str:
-    parts = ["<h2>Failed tests</h2>"]
+    parts = [
+        (
+            "<h2 id=failed>Failed tests</h2>"
+            "<p class=muted>Per cell, with the first line of the message. "
+            "A planted-bug run fails when the bug went unnoticed.</p>"
+        )
+    ]
     for row in ROWS:
         for col in COLS:
             cell_id = f"{row}-{col}"
             state = cell_state(run, cell_id)
             title = f"{row.upper()} × {col_title(run, col)}"
-            head = f"<h3 id={cell_id}>{esc(title)} <span class='pill {CSS_CLASS[state['result']]}'>{esc(state['result'])}</span></h3>"
+            version = col_version(run, col)
+            head = (
+                f"<h3 id={cell_id}>{esc(title)}"
+                + (f" <span class='muted mono small'>{esc(version)}</span>" if version else "")
+                + f" <span class='pill {CSS_CLASS[state['result']]}'>{esc(state['result'])}</span></h3>"
+            )
             cell = run.cells.get(cell_id)
             if state["result"] == "merge conflict":
                 files = "".join(f"<li class=mono>{esc(f)}</li>" for f in state.get("conflicts", []))
@@ -252,138 +574,32 @@ def failed_section(run: Run) -> str:
                     parts.append(f"{head}<p class=muted>None.</p>")
                     continue
                 items = "".join(
-                    f"<li><span class=mono>{esc(c['file'])}::{esc(c['name'])}</span>"
+                    f"<li><span class=tag>{esc(kind(c))}</span> "
+                    f"<span class=mono>{esc(c['file'])}::{esc(c['name'])}</span>"
                     + (" <span class=o-failed>error</span>" if c["outcome"] == "error" else "")
-                    + f"<div class=msg>{esc(c['message'])}</div></li>"
+                    + f"<div class=msg>{esc(c['message'] or '(no message)')}</div></li>"
                     for c in bad
                 )
                 parts.append(f"{head}<ul class=fails>{items}</ul>")
     return "".join(parts)
 
 
-def feature_key(case: dict) -> tuple[str, dict] | None:
-    props = case["props"]
-    if props.get("feature"):
-        info = {"id": props["feature"], "title": props.get("title", ""), "cp": props.get("checkpoint", "")}
-        info["effects"] = props["effects"].split() if "effects" in props else None
-        return props["feature"], info
-    if props.get("checkpoint"):
-        base = case["name"].split("[", 1)[0]
-        cp = props["checkpoint"]
-        effects = [f"{case['file']}.py::{base}"] if props.get("kind") == "effect" else []
-        return f"{cp} {base}", {"id": cp, "title": f"checkpoint test {base}", "cp": cp, "effects": effects}
-    return None
-
-
-def is_mutant_case(case: dict) -> bool:
-    """A case of an effect test run under a planted driver bug (``[...mutant-<name>]``)."""
-    return "mutant-" in case["name"].partition("[")[2]
-
-
-def effects_cell(effects: list[str] | None) -> str:
-    if effects is None:
-        return "<td class=muted>-</td>"
-    if not effects:
-        return "<td class=o-xfailed>none yet</td>"
-    names = "<br>".join(esc(e) for e in effects)
-    return f"<td><details><summary>{len(effects)}</summary><div class=mono>{names}</div></details></td>"
-
-
-def mutants_line(run: Run) -> str:
-    """How many planted-bug cases each cell ran, and how many turned the test red."""
-    parts = []
-    for row in ROWS:
-        for col in COLS:
-            cell = run.cells.get(f"{row}-{col}")
-            if cell is None or cell["cases"] is None:
-                continue
-            cases = [c for c in cell["cases"] if c["conformance"] and is_mutant_case(c)]
-            if not cases:
-                continue
-            caught = sum(c["outcome"] == "passed" for c in cases)
-            parts.append(f"{row.upper()} {'pinned' if col == 'c1' else 'latest'}: {caught} of {len(cases)} caught")
-    if not parts:
-        return ""
-    return (
-        "<p class=note>Planted driver bugs (tests/instruments/zi/conformance/mutants.py, matrix in TEETH.md): "
-        "each effect test also runs under the bugs it names and passes only if the bug turns it red. "
-        + esc(" · ".join(parts))
-        + ".</p>"
-    )
-
-
-def feature_status(cases: list[dict]) -> tuple[str, str]:
-    n = counts(cases)
-    total = len(cases)
-    if n["failed"] + n["error"]:
-        return "o-failed", f"failed {n['failed'] + n['error']}/{total}"
-    if n["passed"] == total:
-        return "o-passed", "passed"
-    if n["xfailed"] == total:
-        return "o-xfailed", "not yet"
-    if n["passed"]:
-        return "o-xfailed", f"partly {n['passed']}/{total}"
-    return "o-skipped", "skipped"
-
-
-def conformance_table(run: Run) -> str:
-    cell_ids = [f"{r}-{c}" for r in ROWS for c in COLS]
-    features: dict[str, dict] = {}
-    per_cell: dict[str, dict[str, list]] = {cid: {} for cid in cell_ids}
-    for cid in cell_ids:
-        cell = run.cells.get(cid)
-        for case in (cell or {}).get("cases") or []:
-            if not case["conformance"]:
-                continue
-            found = feature_key(case)
-            if found is None:
-                continue
-            key, info = found
-            known = features.setdefault(key, info)
-            if known.get("effects") is None and info.get("effects") is not None:
-                known["effects"] = info["effects"]
-            per_cell[cid].setdefault(key, []).append(case)
-    if not features:
-        return "<p class=muted>No conformance results.</p>"
-    head = "".join(f"<th>{cid[:2].upper()}<br>{'pinned' if cid.endswith('c1') else 'latest'}</th>" for cid in cell_ids)
-    body = []
-    for key in sorted(features, key=lambda k: (not features[k]["id"].startswith("F"), features[k]["id"], k)):
-        info = features[key]
-        tds = []
-        for cid in cell_ids:
-            if cid not in run.cells or run.cells[cid]["cases"] is None:
-                tds.append("<td class=muted>-</td>")
-            elif key not in per_cell[cid]:
-                tds.append("<td class=muted>absent</td>")
-            else:
-                css, text = feature_status(per_cell[cid][key])
-                tds.append(f"<td class={css}>{esc(text)}</td>")
-        cp = f" <span class=muted>{esc(info['cp'])}</span>" if info["cp"] and info["cp"] != info["id"] else ""
-        body.append(
-            f"<tr><td class='mono id'>{esc(info['id'])}{cp}</td><td>{esc(info['title'])}</td>"
-            f"{effects_cell(info.get('effects'))}{''.join(tds)}</tr>"
-        )
-    return (
-        f"<div class=scroll><table class=features><tr><th>Id</th><th>Feature</th><th>Effect tests</th>{head}</tr>"
-        f"{''.join(body)}</table></div>"
-    )
-
-
 CSS = """
 :root{--bg:#fbfbfa;--fg:#1d1d1b;--muted:#6b6b66;--line:#ddddd8;--card:#fff;
---good:#e3f2e6;--good-fg:#1e5b2c;--bad:#fbe4e2;--bad-fg:#8a1f17;--warn-fg:#6b5300;--none:#f1f1ee}
+--good:#e3f2e6;--good-fg:#1e5b2c;--bad:#fbe4e2;--bad-fg:#8a1f17;--warn:#f8efd2;--warn-fg:#6b5300;--none:#f1f1ee}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171716;--fg:#e8e8e3;
 --muted:#9a9a93;--line:#34342f;--card:#1f1f1d;--good:#173322;--good-fg:#9fd9ad;--bad:#3a1a17;
---bad-fg:#f2a49c;--warn-fg:#e8cf7a;--none:#262624}}
+--bad-fg:#f2a49c;--warn:#332b12;--warn-fg:#e8cf7a;--none:#262624}}
 :root[data-theme="dark"]{--bg:#171716;--fg:#e8e8e3;--muted:#9a9a93;--line:#34342f;--card:#1f1f1d;
---good:#173322;--good-fg:#9fd9ad;--bad:#3a1a17;--bad-fg:#f2a49c;--warn-fg:#e8cf7a;--none:#262624}
+--good:#173322;--good-fg:#9fd9ad;--bad:#3a1a17;--bad-fg:#f2a49c;--warn:#332b12;--warn-fg:#e8cf7a;--none:#262624}
 *{box-sizing:border-box}
 body{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,sans-serif;margin:0;padding:24px 16px}
-main{max-width:1000px;margin:0 auto}h1{font-size:22px;margin:0 0 4px}
+main{max-width:1040px;margin:0 auto}p,h3{overflow-wrap:anywhere}h1{font-size:22px;margin:0 0 4px}
 h2{font-size:18px;margin:32px 0 6px;padding-top:12px;border-top:1px solid var(--line)}
 h3{font-size:15px;margin:18px 0 4px}a{color:inherit}.muted{color:var(--muted)}
+nav{font-size:13.5px;margin:6px 0 14px;color:var(--muted)}nav a{margin-right:12px}
 .mono,.msg{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;overflow-wrap:anywhere}
-.small{font-size:12.5px;color:inherit;opacity:.85;margin-top:4px}
+.small{font-size:12.5px;margin-top:2px}
 .msg{color:var(--muted);margin:2px 0 8px}
 table{border-collapse:collapse;background:var(--card);width:100%}
 th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
@@ -391,11 +607,24 @@ th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-ali
 .good{background:var(--good);color:var(--good-fg)}.bad{background:var(--bad);color:var(--bad-fg)}
 .none{background:var(--none);color:var(--muted)}
 .pill{font-size:12px;font-weight:600;padding:1px 8px;border-radius:10px;vertical-align:middle}
-.scroll{overflow-x:auto;margin:8px 0}ul.fails{padding-left:20px}ul.fails li{overflow-wrap:anywhere}
-.features{min-width:600px}.features td,.features th{padding:5px 8px;font-size:13.5px}.features td.id{white-space:nowrap;overflow-wrap:normal}
-.o-failed{color:var(--bad-fg);font-weight:600}.o-xfailed,.o-skipped{color:var(--warn-fg)}.o-passed{color:var(--good-fg)}
+.scroll{overflow-x:auto;margin:8px 0;-webkit-overflow-scrolling:touch}
+ul.fails{padding-left:20px}ul.fails li{overflow-wrap:anywhere}
+.counts{min-width:640px}.counts th,.counts td{font-size:13.5px;padding:6px 8px}.counts th[scope=row]{font-weight:600}
+.effects{min-width:760px}.effects td,.effects th{padding:5px 8px;font-size:13.5px}
+.effects td.id,.effects th.id{white-space:nowrap;overflow-wrap:normal;position:sticky;left:0;background:var(--card)}
+.effects tr.group td{border-top:2px solid var(--muted)}
+.effects tfoot td{font-weight:600}
+th.cellhead{white-space:nowrap;font-size:13px}
+.chips{display:flex;flex-direction:column;align-items:flex-start;gap:3px}
+.chip{display:inline-block;font-size:12px;line-height:1.4;padding:1px 7px;border-radius:9px;white-space:nowrap}
+.chip b{font-weight:600}.chip.ok{background:var(--good);color:var(--good-fg)}
+.chip.bad{background:var(--bad);color:var(--bad-fg)}.chip.warn{background:var(--warn);color:var(--warn-fg)}
+.chip.none{background:var(--none);color:var(--muted)}
+.legend .chip{margin:0 2px}
+.tag{font-size:11.5px;padding:0 6px;border-radius:8px;background:var(--none);color:var(--muted);white-space:nowrap}
+.o-failed{color:var(--bad-fg);font-weight:600}.o-passed{color:var(--good-fg)}
 .note{margin:8px 0 0;color:var(--muted);font-size:13.5px}
-details summary{cursor:pointer}details .mono{font-size:12px;margin-top:4px}
+details summary{cursor:pointer;color:var(--muted);font-size:12.5px}details ul{margin:4px 0;padding-left:18px;font-size:12px}
 @media (max-width:640px){
  .grid thead{display:none}.grid,.grid tbody,.grid tr,.grid th,.grid td{display:block;width:100%!important}
  .grid tr{margin-bottom:12px}.grid td::before{content:attr(data-label);display:block;font-size:12px;opacity:.8}
@@ -415,18 +644,18 @@ def page(run: Run) -> str:
         "LabOne Q emulation, no hardware. Row's uv.lock installed, then laboneq set to the column's "
         "version (zhinst-* follow). Not implemented yet = strict expected failure; it turns red if it passes."
     )
+    nav = (
+        "<nav><a href='#effects'>Effect checks</a><a href='#references'>CP1-CP5 reference files</a>"
+        "<a href='#failed'>Failed tests</a></nav>"
+    )
     return (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1">'
         f"<title>ZI driver tests</title><style>{CSS}</style></head><body><main>"
-        "<h1>ZI driver tests</h1>"
-        f"{grid(run)}<p class=note>{note}</p><p class=note>{suite}</p>"
-        f"{failed_section(run)}"
-        "<h2>Conformance per feature</h2>"
-        "<p class=muted>What qibocal needs from the controller, one line per feature (id, first checkpoint). "
-        "Effect tests check what a qibolab call makes LabOne Q do, at the LabOne Q boundary; "
-        "the other tests check the qibolab contract (keys, shapes, refusals).</p>"
-        f"{mutants_line(run)}{conformance_table(run)}</main></body></html>"
+        f"<h1>ZI driver tests</h1>{nav}"
+        f"<div class=scroll>{grid(run)}</div><p class=note>{note}</p><p class=note>{suite}</p>"
+        f"{what_ran(run)}{effect_checks(run)}{references(run)}{failed_section(run)}"
+        "</main></body></html>"
     )
 
 
