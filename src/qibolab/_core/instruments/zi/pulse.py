@@ -7,7 +7,14 @@ from pydantic import TypeAdapter
 
 from qibolab._core.components import Channel, Config, IqChannel
 from qibolab._core.identifier import ChannelId
-from qibolab._core.pulses import Delay, Envelope, Pulse, Readout, Rectangular
+from qibolab._core.pulses import (
+    Delay,
+    Envelope,
+    Pulse,
+    Readout,
+    Rectangular,
+    VirtualZ,
+)
 from qibolab._core.sequence import PulseSequence
 from qibolab._core.sweeper import Parameter
 
@@ -77,6 +84,14 @@ def play(
                 pulse_parameters={"envelope": op.envelope.model_dump(mode="json")},
                 amplitude=swept.get((op.id, Parameter.amplitude), op.amplitude),
                 phase=swept.get((op.id, Parameter.relative_phase), op.relative_phase),
+            )
+        elif isinstance(op, VirtualZ) and isinstance(channel, IqChannel):
+            experiment.play(
+                id,
+                pulse=None,
+                increment_oscillator_phase=swept.get(
+                    (op.id, Parameter.phase), op.phase
+                ),
             )
         elif isinstance(op, Readout) and configs[id].kernel is None:
             experiment.play(

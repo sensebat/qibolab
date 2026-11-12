@@ -16,7 +16,7 @@ from qibolab._core.execution_parameters import AveragingMode
 from qibolab._core.instruments.zi import pulse as zipulse
 from qibolab._core.instruments.zi.controller import SAMPLING_RATE
 from qibolab._core.instruments.zi.sweep import split
-from qibolab._core.pulses import Delay, Gaussian, Pulse
+from qibolab._core.pulses import Delay, Gaussian, Pulse, VirtualZ
 from qibolab._core.sequence import PulseSequence
 from qibolab._core.sweeper import Parameter, Sweeper
 
@@ -158,4 +158,50 @@ def test_relative_phase(connected, configs, averaging_mode):  # noqa: F811
         values=PHASES,
         pulses=[sequence[0][1], sequence[2][1]],
     )
+    run(connected, configs, sequence, [[phase]], averaging_mode)
+
+
+def ramsey_vz(qubits) -> tuple[PulseSequence, list[VirtualZ]]:
+    """Two drive pulses with a virtual Z between them, then the readout."""
+    sequence = PulseSequence()
+    vzs = []
+    for q in qubits:
+        drive = Pulse(duration=40, amplitude=0.5, envelope=Gaussian(rel_sigma=0.2))
+        vz = VirtualZ(phase=0.1)
+        vzs.append(vz)
+        sequence.extend(
+            [
+                (f"q{q}/drive", drive),
+                (f"q{q}/drive", vz),
+                (f"q{q}/drive", drive.new()),
+                (f"q{q}/acquisition", Delay(duration=80)),
+            ]
+        )
+    return sequence | readouts(qubits), vzs
+
+
+def test_virtual_z_phase_lookup(channels, configs):  # noqa: F811
+    """F11: the swept phase of a virtual Z increments the drive oscillator."""
+    sequence, (vz,) = ramsey_vz([0])
+    swept = {}
+    phase = Sweeper(parameter=Parameter.phase, values=PHASES, pulses=[vz])
+    _, real, _ = split([[phase]], channels, configs, Calibration(), swept)
+
+    ops = operations(sequence, channels, configs, swept)
+
+    played = ops["q0/drive"]
+    assert len(played) == 3
+    assert played[1].pulse is None
+    assert played[1].increment_oscillator_phase is real[0][0]
+    assert real[0][0].values == pytest.approx(PHASES)
+    # without a sweep, the fixed phase is added, with its sign
+    ops = operations(sequence, channels, configs, {})
+    assert ops["q0/drive"][1].increment_oscillator_phase == 0.1
+
+
+@pytest.mark.parametrize("averaging_mode", AVERAGING)
+def test_virtual_z_phase(connected, configs, averaging_mode):  # noqa: F811
+    """F11: phase of the virtual Z of two qubits."""
+    sequence, vzs = ramsey_vz([0, 1])
+    phase = Sweeper(parameter=Parameter.phase, values=PHASES, pulses=vzs)
     run(connected, configs, sequence, [[phase]], averaging_mode)

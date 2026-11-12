@@ -20,6 +20,7 @@ _PULSES = {
     Parameter.duration: (Parameter.duration, NS, True),
     Parameter.duration_interpolated: (Parameter.duration, NS, True),
     Parameter.relative_phase: (Parameter.relative_phase, 1.0, True),
+    Parameter.phase: (Parameter.phase, 1.0, True),
 }
 """Swept pulse parameters: key in :data:`Swept`, scale to LabOne Q, real time."""
 
@@ -44,8 +45,8 @@ def _group(
       since an SHFQA generator cannot be swept in real time in integration mode;
     - parameters of pulses (:data:`_PULSES`): the parameter is recorded in
       ``swept``, to be used when the pulse is played. Amplitude runs in near time;
-      duration (in s, also interpolated: both resample the envelope) and relative
-      phase run in real time.
+      duration (in s, also interpolated: both resample the envelope), relative
+      phase and the phase of a virtual Z run in real time.
     """
     parameters = []
     real_time = set()
