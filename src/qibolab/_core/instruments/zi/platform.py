@@ -26,6 +26,19 @@ They are keyed by the :class:`Qubit` attribute holding their id.
 """
 
 
+def _check_kind(name: str, instrument: ZiInstrument) -> None:
+    """Check that the ports of an instrument can be described by a :data:`Cluster`.
+
+    An SHFQC has an SG port and a QA port with the same number, so its channels are
+    written directly.
+    """
+    if instrument.kind not in _CHANNELS:
+        raise ValueError(
+            f"Instrument '{name}' of kind '{instrument.kind}' cannot be described by "
+            "port numbers only; write its channels directly."
+        )
+
+
 def _element_channels(
     element: QubitId, el: Qubit, name: str, kind: InstrumentKind, port: int
 ) -> dict[ChannelId, Channel]:
@@ -86,10 +99,7 @@ def map_ports(
 
     channels: dict[ChannelId, Channel] = {}
     for name, (instrument, instrument_ports) in cluster.items():
-        if instrument.kind not in _CHANNELS:
-            raise ValueError(
-                f"Instrument '{name}' of kind '{instrument.kind}' has no signal ports."
-            )
+        _check_kind(name, instrument)
         for port, connected in instrument_ports.items():
             _check_port(name, instrument, port)
             for element in connected:
@@ -138,6 +148,7 @@ def infer_los(cluster: Cluster) -> dict[tuple[QubitId, bool], str]:
     """
     los = {}
     for name, (instrument, instrument_ports) in cluster.items():
+        _check_kind(name, instrument)
         if instrument.kind == "HDAWG":
             continue
         is_probe = instrument.kind == "SHFQA"

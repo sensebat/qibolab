@@ -11,15 +11,25 @@ pytest.importorskip("laboneq")
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.dsl.experiment import Acquire, Match
-from laboneq.simple import Experiment
+from laboneq.simple import Experiment, ModulationType
 
+from qibolab._core.components import AcquisitionChannel, IqChannel, OscillatorConfig
 from qibolab._core.execution_parameters import (
     AcquisitionType,
     AveragingMode,
     ExecutionParameters,
 )
-from qibolab._core.instruments.zi import results
+from qibolab._core.instruments.zi import (
+    ZiAcquisitionConfig,
+    ZiController,
+    ZiInstrument,
+    ZiIqConfig,
+    map_ports,
+    results,
+)
+from qibolab._core.instruments.zi.controller import calibration, device_setup
 from qibolab._core.pulses import Gaussian, Pulse
+from qibolab._core.qubits import Qubit
 from qibolab._core.sweeper import Parameter, Sweeper
 
 from ..test_calibration import channels, configs  # noqa: F401
@@ -284,3 +294,112 @@ def test_fast_reset_needs_pulse(connected, configs):  # noqa: F811
             fast_reset(AveragingMode.CYCLIC),
             [],
         )
+
+
+SHFQC_LO = {"qc/qa/lo": 7.0e9, "qc/sg0/lo": 5.0e9}
+"""LOs of the SHFQC rack: one for the QA channel, one for SG ports 0 and 1."""
+
+
+@pytest.fixture
+def shfqc():
+    """Two qubits on one SHFQC (invented serial), driven on SG ports 0 and 1."""
+    chs = {}
+    cfgs = {lo: OscillatorConfig(frequency=f, power=0) for lo, f in SHFQC_LO.items()}
+    for q in (0, 1):
+        chs[f"q{q}/drive"] = IqChannel(device="qc", path=str(q), lo="qc/sg0/lo")
+        chs[f"q{q}/probe"] = IqChannel(device="qc", path="0", lo="qc/qa/lo")
+        chs[f"q{q}/acquisition"] = AcquisitionChannel(
+            device="qc", path="0", probe=f"q{q}/probe"
+        )
+        cfgs[f"q{q}/drive"] = ZiIqConfig(frequency=5.1e9 + q * 1e6, power_range=10)
+        cfgs[f"q{q}/probe"] = ZiIqConfig(frequency=7.1e9 + q * 1e6, power_range=5)
+        cfgs[f"q{q}/acquisition"] = ZiAcquisitionConfig(
+            delay=200, smearing=0, power_range=-30, threshold=0.1, iq_angle=0.2
+        )
+    controller = ZiController(
+        address="127.0.0.1:8004",
+        instruments={
+            "qc": ZiInstrument(kind="SHFQC", serial="DEV12301", options="SHFQC/QC6CH")
+        },
+        channels=chs,
+        emulation=True,
+    )
+    controller.connect()
+    yield controller, cfgs
+    controller.disconnect()
+
+
+def test_shfqc_ports(shfqc):
+    controller, _ = shfqc
+    setup = controller.session.device_setup
+    ports = {
+        id: setup.logical_signal_by_uid(id).physical_channel.uid
+        for id in controller.channels
+    }
+    assert ports == {
+        "q0/drive": "qc/sgchannels_0_output",
+        "q1/drive": "qc/sgchannels_1_output",
+        "q0/probe": "qc/qachannels_0_output",
+        "q1/probe": "qc/qachannels_0_output",
+        "q0/acquisition": "qc/qachannels_0_input",
+        "q1/acquisition": "qc/qachannels_0_input",
+    }
+
+
+def test_shfqc_oscillators(shfqc):
+    controller, cfgs = shfqc
+    ids = sorted(controller.channels)
+    calib = calibration(ids, controller.channels, controller.instruments, cfgs)
+    assert calib["q0/drive"].oscillator.modulation_type == ModulationType.HARDWARE
+    assert calib["q0/probe"].oscillator.modulation_type == ModulationType.SOFTWARE
+    assert calib["q0/acquisition"].oscillator is calib["q0/probe"].oscillator
+
+
+@pytest.mark.parametrize(
+    "acquisition_type", [AcquisitionType.INTEGRATION, AcquisitionType.DISCRIMINATION]
+)
+def test_shfqc_play(shfqc, acquisition_type):
+    """Drive, sweep and readout run on an SHFQC, also with fast reset."""
+    controller, cfgs = shfqc
+    sequence = drives([0, 1])
+    sweepers = [frequencies(cfgs, ["q0/drive", "q1/drive"], points=3)]
+    opts = options(AveragingMode.CYCLIC).model_copy(
+        update={"acquisition_type": acquisition_type}
+    )
+
+    results = controller.play(cfgs, [sequence], opts, sweepers)
+
+    for result in results.values():
+        assert result.shape == opts.results_shape(sweepers)
+
+    if acquisition_type is AcquisitionType.DISCRIMINATION:
+        controller.reset_pulses = {f"q{q}/acquisition": rx(q) for q in (0, 1)}
+        opts = opts.model_copy(update={"fast_reset": True})
+        results = controller.play(cfgs, [sequence], opts, sweepers)
+        assert len(results) == 2
+
+
+def test_shfqc_qa_port():
+    """An SHFQC has one QA channel, port 0, and its SG ports follow the model."""
+    qc = ZiInstrument(kind="SHFQC", serial="DEV12301", options="SHFQC/QC4CH")
+    assert qc.model == "QC4CH"
+    assert qc.nports == 4
+    chs = {
+        "q0/probe": IqChannel(device="qc", path="1"),
+        "q0/acquisition": AcquisitionChannel(device="qc", path="1", probe="q0/probe"),
+    }
+    with pytest.raises(ValueError, match="QA channel"):
+        device_setup("127.0.0.1:8004", {"qc": qc}, None, chs)
+    with pytest.raises(ValueError, match="Port 4"):
+        device_setup(
+            "127.0.0.1:8004",
+            {"qc": qc},
+            None,
+            {"q0/drive": IqChannel(device="qc", path="4")},
+        )
+
+
+def test_shfqc_map_ports():
+    qc = ZiInstrument(kind="SHFQC", serial="DEV12301")
+    with pytest.raises(ValueError, match="write its channels directly"):
+        map_ports({"qc": (qc, {0: ["q0"]})}, {"q0": Qubit.default("q0")})
