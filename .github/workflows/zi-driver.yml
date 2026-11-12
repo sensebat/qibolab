@@ -1,15 +1,22 @@
 # Offline tests of the Zurich Instruments driver: LabOne Q emulation only, no hardware.
 #
-# Same tests in every row (tests/instruments/zi of the driver + the conformance suite of
-# orkun/ci), each row installed from its own uv.lock. Runs on orkun/ci have two rows:
-#   today    "zi_drivers on 26.4 (rack today)": upstream ElStabilini/qibolab@zi_drivers,
-#            laboneq 26.4. Must be green.
-#   upgrade  "zi_drivers on 26.10 (after upgrade)": upstream zi_drivers merged into
-#            orkun/26.10, laboneq 26.10. Informational; a merge conflict is reported.
-# A push to orkun/26.10 has one row:
-#   branch   "orkun/26.10 branch": that commit alone, laboneq 26.10.
-# A last job builds one HTML report (artifact "test-report"); on orkun/ci the "pages" job
-# publishes it at https://sensebat.github.io/qibolab/.
+# A 2x2 of code (rows) and environment (columns):
+#   R1  ElStabilini/qibolab@zi_drivers, newest commit
+#   R2  sensebat/qibolab@orkun/26.10 with ElStabilini/qibolab@zi_drivers merged for this run
+#       only (nothing pushed); a merge conflict is reported with the files
+#   C1  laboneq pinned: the version in the uv.lock of ElStabilini/qibolab@zi_drivers
+#   C2  laboneq latest: the newest laboneq on PyPI
+# Each cell installs the row's uv.lock, replaces laboneq by the column's version (zhinst-*
+# follow, every other package as locked) and runs tests/instruments/zi plus the conformance
+# suite of sensebat/qibolab@orkun/ci. A cell is red when a test fails.
+#
+# Triggers:
+#   schedule (every 30 min)  runs only when the key (R1, R2, orkun/ci commits + newest
+#                            laboneq) differs from the published state.json
+#   workflow_dispatch        always runs (only_if_changed: behave like the schedule)
+#   push to orkun/ci         always runs
+#   push to orkun/26.10      only the R2 cells for that commit; no Pages
+# Runs on orkun/ci publish index.html and state.json at https://sensebat.github.io/qibolab/.
 name: zi-driver
 
 on:
@@ -17,73 +24,91 @@ on:
     branches: [orkun/ci, orkun/26.10]
   # schedule and the Run-workflow button work only from the default branch (orkun/ci).
   schedule:
-    - cron: "0 3 * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch:
+    inputs:
+      only_if_changed:
+        description: Skip when commits and newest laboneq are unchanged (as the schedule does)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# One run per branch at a time; a newer pending run replaces an older pending one.
+concurrency:
+  group: zi-driver-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
-  UPSTREAM_REPO: ElStabilini/qibolab
-  UPSTREAM_REF: zi_drivers
-  OURS_REF: orkun/26.10
+  R1_REPO: ElStabilini/qibolab
+  R1_REF: zi_drivers
+  R2_REPO: sensebat/qibolab
+  R2_REF: orkun/26.10
+  SUITE_REPO: sensebat/qibolab
   SUITE_REF: orkun/ci
+  STATE_URL: https://sensebat.github.io/qibolab/state.json
 
 jobs:
-  test:
-    name: ${{ matrix.name }}
+  changes:
+    name: Commits, laboneq versions, run or skip
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    continue-on-error: ${{ matrix.row == 'upgrade' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # A push to orkun/26.10 tests only that commit; every other run tests the two rows.
-        include: ${{ fromJSON(github.event_name == 'push' && github.ref_name == 'orkun/26.10' && '[{"row":"branch","name":"orkun/26.10 branch"}]' || '[{"row":"today","name":"zi_drivers on 26.4 (rack today)"},{"row":"upgrade","name":"zi_drivers on 26.10 (after upgrade)"}]') }}
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+      key: ${{ steps.decide.outputs.key }}
+      r1_sha: ${{ steps.decide.outputs.r1_sha }}
+      r2_sha: ${{ steps.decide.outputs.r2_sha }}
+      ci_sha: ${{ steps.decide.outputs.ci_sha }}
+      pinned: ${{ steps.decide.outputs.pinned }}
+      latest: ${{ steps.decide.outputs.latest }}
+      matrix: ${{ steps.decide.outputs.matrix }}
     steps:
-      - name: Choose the driver for this row
-        env:
-          ROW: ${{ matrix.row }}
-          ROW_NAME: ${{ matrix.name }}
-        run: |
-          case "$ROW" in
-            today)
-              repo=$UPSTREAM_REPO; ref=$UPSTREAM_REF ;;
-            branch)
-              repo=$GITHUB_REPOSITORY; ref=$OURS_REF
-              if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_NAME" = "$OURS_REF" ]; then
-                ref=$GITHUB_SHA
-              fi ;;
-            upgrade)
-              repo=$GITHUB_REPOSITORY; ref=$OURS_REF
-              echo "MERGE_URL=https://github.com/$UPSTREAM_REPO" >> "$GITHUB_ENV"
-              echo "MERGE_REF=$UPSTREAM_REF" >> "$GITHUB_ENV" ;;
-          esac
-          # The suite of this commit when it is on orkun/ci, else the head of orkun/ci.
-          suite=$SUITE_REF
-          if [ "$GITHUB_REF_NAME" = "$SUITE_REF" ]; then suite=$GITHUB_SHA; fi
-          {
-            echo "ROW=$ROW"
-            echo "ROW_NAME=$ROW_NAME"
-            echo "DRIVER_REPO=$repo"
-            echo "DRIVER_REF=$ref"
-            echo "SUITE=$suite"
-          } >> "$GITHUB_ENV"
-
-      - name: Check out the driver ${{ env.DRIVER_REPO }}@${{ env.DRIVER_REF }}
+      - name: Check out the ci scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ env.DRIVER_REPO }}
-          ref: ${{ env.DRIVER_REF }}
+          sparse-checkout: ci
+          persist-credentials: false
+
+      - name: Resolve and decide
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          ONLY_IF_CHANGED: ${{ inputs.only_if_changed || false }}
+        run: bash ci/changes.sh
+
+  cell:
+    name: ${{ matrix.name }}
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
+    env:
+      ROW: ${{ matrix.row }}
+      COL: ${{ matrix.col }}
+      R1_SHA: ${{ needs.changes.outputs.r1_sha }}
+      LABONEQ_PINNED: ${{ needs.changes.outputs.pinned }}
+      LABONEQ_LATEST: ${{ needs.changes.outputs.latest }}
+    steps:
+      - name: Check out the row's code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.row == 'r1' && env.R1_REPO || env.R2_REPO }}
+          ref: ${{ matrix.row == 'r1' && needs.changes.outputs.r1_sha || needs.changes.outputs.r2_sha }}
           path: driver
-          # The merge needs history.
-          fetch-depth: ${{ matrix.row == 'upgrade' && '0' || '1' }}
+          # The R2 merge needs history.
+          fetch-depth: ${{ matrix.row == 'r2' && '0' || '1' }}
           persist-credentials: false
 
       - name: Check out the conformance suite and ci scripts (orkun/ci)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.SUITE }}
+          ref: ${{ needs.changes.outputs.ci_sha }}
           path: suite
           persist-credentials: false
 
@@ -93,20 +118,21 @@ jobs:
           python-version: "3.13"
           cache-dependency-glob: driver/uv.lock
 
-      - name: Merge, install from the driver's uv.lock, test
-        run: bash suite/ci/run_row.sh driver suite "row-$ROW"
+      - name: Merge (R2), install, set laboneq, test
+        run: bash suite/ci/run_cell.sh driver suite "cell-$ROW-$COL"
 
-      - name: Upload the row results
+      - name: Upload the cell results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: row-${{ matrix.row }}
-          path: row-${{ matrix.row }}/
+          name: cell-${{ matrix.cell }}
+          path: cell-${{ matrix.cell }}/
           if-no-files-found: warn
 
   report:
-    needs: test
-    if: always()
+    name: Report
+    needs: [changes, cell]
+    if: always() && needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -116,33 +142,38 @@ jobs:
           sparse-checkout: ci
           persist-credentials: false
 
-      - name: Download the row results
+      - name: Download the cell results
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: row-*
-          path: rows
+          pattern: cell-*
+          path: cells
 
-      - name: Build the HTML report
+      - name: Build index.html and state.json
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          KEY: ${{ needs.changes.outputs.key }}
+          R1_SHA: ${{ needs.changes.outputs.r1_sha }}
+          R2_SHA: ${{ needs.changes.outputs.r2_sha }}
+          CI_SHA: ${{ needs.changes.outputs.ci_sha }}
+          LABONEQ_PINNED: ${{ needs.changes.outputs.pinned }}
+          LABONEQ_LATEST: ${{ needs.changes.outputs.latest }}
+          MATRIX: ${{ needs.changes.outputs.matrix }}
         run: |
-          mkdir -p rows
-          python3 ci/report.py rows report/index.html --summary "$GITHUB_STEP_SUMMARY" \
-            --run-url "$RUN_URL" --when "$(date -u '+%Y-%m-%d %H:%M UTC')"
+          mkdir -p cells
+          python3 ci/report.py cells report --summary "$GITHUB_STEP_SUMMARY" \
+            --when "$(date -u '+%Y-%m-%d %H:%M UTC')"
 
-      - name: Upload the HTML report
+      - name: Upload the report
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-report
-          path: report/index.html
+          path: report/
 
-  # Publish the report at https://sensebat.github.io/qibolab/ (default branch only).
-  # Runs even when a row is red; skipped when the report itself was not built.
+  # Publish at https://sensebat.github.io/qibolab/ (orkun/ci only), also when a cell is red.
   pages:
+    name: Publish to GitHub Pages
     needs: report
-    if: >-
-      always() && needs.report.result == 'success' && github.ref == 'refs/heads/orkun/ci'
-      && contains(fromJSON('["schedule", "workflow_dispatch", "push"]'), github.event_name)
+    if: always() && needs.report.result == 'success' && github.ref == 'refs/heads/orkun/ci'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -155,7 +186,7 @@ jobs:
       group: pages
       cancel-in-progress: false
     steps:
-      - name: Download the HTML report
+      - name: Download the report
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: test-report
