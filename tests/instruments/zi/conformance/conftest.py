@@ -1,8 +1,10 @@
 """Fixtures for the conformance suite: a small fake rack in LabOne Q emulation.
 
 Each test carries ``@pytest.mark.feature("F01")`` or ``@pytest.mark.checkpoint("CP1")``.
-The id, its title and its checkpoint go into the junit xml as test properties, and the
-laboneq and zhinst-core versions go in as suite properties.
+The id, its title, its checkpoint and its effect tests go into the junit xml as test
+properties, with the kind of test (``effect`` for test_effects_*.py and
+test_references.py, ``contract`` otherwise); the laboneq and zhinst-core versions go in
+as suite properties.
 """
 
 import re
@@ -62,7 +64,7 @@ VERSIONS = {name: version(name) for name in ("laboneq", "zhinst-core")}
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "feature(id): conformance feature from FEATURES")
-    config.addinivalue_line("markers", "checkpoint(id): Elisa's checkpoint CP1..CP5")
+    config.addinivalue_line("markers", "checkpoint(id): checkpoint CP1..CP5")
 
 
 def pytest_report_header(config):
@@ -79,9 +81,13 @@ def pytest_runtest_setup(item):
             ("title", feature["title"]),
             ("group", feature["group"]),
             ("checkpoint", feature["checkpoint"]),
+            ("effects", " ".join(feature["effects"])),
         ]
     for marker in item.iter_markers("checkpoint"):
         item.user_properties.append(("checkpoint", marker.args[0]))
+    name = item.path.name
+    effect = name.startswith("test_effects_") or name == "test_references.py"
+    item.user_properties.append(("kind", "effect" if effect else "contract"))
 
 
 def refused(message):
