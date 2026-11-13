@@ -1,5 +1,6 @@
 """Conversion of qibolab sweepers to LabOne Q sweep parameters."""
 
+import numpy as np
 from laboneq.simple import Calibration, ModulationType, SweepParameter
 
 from qibolab._core.components import Channel, Config
@@ -35,6 +36,12 @@ def _real_time(id: ChannelId, calibration: Calibration) -> bool:
     )
 
 
+def _uniform(values: np.ndarray) -> bool:
+    """Whether ``values`` are evenly spaced."""
+    steps = np.diff(values)
+    return bool(np.all(steps == steps[:1]))
+
+
 def _group(
     group: ParallelSweepers,
     channels: dict[ChannelId, Channel],
@@ -42,6 +49,7 @@ def _group(
     calibration: Calibration,
     amplitudes: Amplitudes,
     pulse_channels: dict[PulseId, ChannelId],
+    nested: bool,
 ) -> tuple[list[SweepParameter], bool]:
     """Sweep parameters of one group of parallel sweepers, and their execution type.
 
@@ -52,9 +60,15 @@ def _group(
     - amplitude of pulses: the parameter is recorded in ``amplitudes``, to be used
       when the pulse is played. The channel of a pulse is the one it is played on in
       the sequences, which for a :class:`Readout` is its acquisition channel.
+
+    A frequency sweep with unevenly spaced values runs in near time when it would be
+    ``nested`` inside a real-time sweep: LabOne Q (26.4 and 26.10) fails to generate
+    the sequencer code for it, declaring its oscillator variable once per step of
+    the outer sweep.
     """
     parameters = []
     real_time = set()
+    uneven = False
     for sweeper in group:
         if sweeper.parameter is Parameter.frequency:
             for id in sweeper.channels:
@@ -63,6 +77,7 @@ def _group(
                 oscillator.frequency = SweepParameter(values=sweeper.values - lo)
                 parameters.append(oscillator.frequency)
                 real_time.add(_real_time(id, calibration))
+                uneven |= not _uniform(oscillator.frequency.values)
         elif sweeper.parameter is Parameter.amplitude:
             for pulse in sweeper.pulses:
                 amplitudes[pulse.id] = SweepParameter(values=sweeper.values)
@@ -76,7 +91,7 @@ def _group(
         raise NotImplementedError(
             "Sweeping in parallel in near time and in real time is not supported."
         )
-    return parameters, real_time == {True}
+    return parameters, real_time == {True} and not (nested and uneven)
 
 
 def split(
@@ -103,8 +118,9 @@ def split(
     real_axes: Axes = []
     pulse_channels = _channels_of(sequences)
     for index, group in enumerate(sweepers):
+        nested = len(real) > 0
         parameters, real_time = _group(
-            group, channels, configs, calibration, amplitudes, pulse_channels
+            group, channels, configs, calibration, amplitudes, pulse_channels, nested
         )
         if real_time:
             real.append(parameters)

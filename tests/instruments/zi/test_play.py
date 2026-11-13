@@ -156,6 +156,36 @@ def test_near_and_real_time_axes(connected, configs, averaging_mode):  # noqa: F
         assert not np.isnan(result).any()
 
 
+@pytest.mark.parametrize(
+    "offsets", [[-1e6, 0.0, 1e6], [-1e6, 0.0, 2e6]], ids=["even", "uneven"]
+)
+def test_drive_amplitude_around_frequency(connected, configs, offsets):  # noqa: F811
+    """A drive amplitude sweep around a drive frequency sweep, both in real time.
+
+    LabOne Q cannot nest an unevenly spaced frequency sweep in a real-time one
+    ("Trying to declare variable c_freq_osc_0 which has already been declared"), so
+    that one runs in near time.
+    """
+    sequence = drives([0])
+    [pulse] = [p for p in sequence.channel("q0/drive") if isinstance(p, Pulse)]
+    amplitude = Sweeper(
+        parameter=Parameter.amplitude, values=np.array([0.1, 0.5]), pulses=[pulse]
+    )
+    frequency = Sweeper(
+        parameter=Parameter.frequency,
+        values=configs["q0/drive"].frequency + np.array(offsets),
+        channels=["q0/drive"],
+    )
+    sweepers = [[amplitude], [frequency]]
+    opts = options(AveragingMode.CYCLIC)
+
+    results = connected.play(configs, [sequence], opts, sweepers)
+
+    for result in results.values():
+        assert result.shape == opts.results_shape(sweepers)
+        assert not np.isnan(result).any()
+
+
 def test_unsupported(connected, configs):  # noqa: F811
     sequence = readouts([0])
     with pytest.raises(NotImplementedError):
