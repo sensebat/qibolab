@@ -374,9 +374,10 @@ class ZiController(Controller):
     ) -> dict[PulseId, Result]:
         """Execute the sequences in a single LabOne Q experiment.
 
-        Each sequence is followed by the relaxation time. Sweeps of the frequency of
-        a hardware-modulated channel (drive) run in real time, inside the acquisition
-        loop; all the others run in near time, around it. Only
+        Each sequence is followed by the relaxation time. Sweeps on a
+        hardware-modulated channel (drive) run in real time, inside the acquisition
+        loop; the ones on a software-modulated channel (probe) run in near time,
+        around it. Only
         :attr:`AcquisitionType.INTEGRATION` is supported, with cyclic or single-shot
         averaging.
         """
@@ -392,7 +393,7 @@ class ZiController(Controller):
         experiment = self._experiment(ids, calib)
         amplitudes: sweep.Amplitudes = {}
         near, real, axes = sweep.split(
-            sweepers, self.channels, configs, calib, amplitudes
+            sweepers, sequences, self.channels, configs, calib, amplitudes
         )
         with ExitStack() as stack:
             for group in near:
