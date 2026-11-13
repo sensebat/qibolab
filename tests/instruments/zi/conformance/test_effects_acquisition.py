@@ -21,7 +21,7 @@ real-time run (shots, then real-time sweeps), so it differs along those axes. Al
 near-time sweep the data repeat, and only the sweep values LabOne Q reports for the
 axis (``Results.get_axis``) tell the points apart.
 
-The planted bugs are in :mod:`mutants`.
+The injected faults are in :mod:`mutants`.
 """
 
 import laboneq.simple as lq

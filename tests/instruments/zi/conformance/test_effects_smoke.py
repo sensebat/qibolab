@@ -3,7 +3,7 @@
 One effect, observed at the LabOne Q boundary: a pulse of amplitude 0.3 on
 ``q0/drive`` makes LabOne Q play amplitude 0.3 on the signal that reaches the port of
 ``q0/drive``, and nothing else there. It runs on the driver (must pass) and under two
-planted bugs that send the pulse elsewhere (must fail).
+injected faults that send the pulse elsewhere (must fail).
 
 Also checks that the ``effects`` field of :data:`features.FEATURES` matches the
 ``feature`` markers of the effect tests (the files of ``conftest.EFFECT_FILES``).

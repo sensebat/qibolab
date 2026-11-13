@@ -19,7 +19,7 @@ sweep parameters, kernels): the test passes if the call is refused with a
 it stays green the day the feature is implemented. The strict xfails that wait for
 the feature itself are elsewhere (test_conformance.py and the effect files).
 
-Every test that must pass carries ``@kills``: it also runs under planted driver bugs
+Every test that must pass carries ``@kills``: it also runs under injected driver faults
 (:mod:`mutants`) and must fail under each of them.
 
 Pattern: zhinst/laboneq-applications v26.4.0 tests/helpers/dsl.py (assert on the DSL

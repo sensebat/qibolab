@@ -83,7 +83,7 @@ NS = 1e-9
 class Missing(AssertionError):
     """An expected effect is not there, e.g. no signal reaches a qibolab channel.
 
-    An ``AssertionError``, so that a planted bug that removes the effect counts as
+    An ``AssertionError``, so that an injected fault that removes the effect counts as
     caught. Problems of the capture itself raise ``RuntimeError``.
     """
 

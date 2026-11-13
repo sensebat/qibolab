@@ -6,7 +6,7 @@ it yet. ``qibocal`` names protocols that use the feature (paths are relative to
 ``qibocal/src/qibocal/protocols``). ``laboneq`` names the LabOne Q construct that can
 implement it. ``effects`` lists the effect tests of the feature, as
 ``<file>::<function>`` in this folder: what a qibolab call makes LabOne Q do (or the
-refusal it gets), observed at the LabOne Q boundary and run under planted driver bugs
+refusal it gets), observed at the LabOne Q boundary and run under injected driver faults
 (``test_effects_*.py``). An empty list means no effect test yet; the contract tests of
 ``test_conformance.py`` still cover the feature. test_effects_smoke.py checks that this
 field and the ``feature`` markers agree.

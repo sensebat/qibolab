@@ -16,7 +16,7 @@ Two views, both public LabOne Q API present in laboneq 26.4 and 26.10:
 
 Expected values are computed from the qibolab objects (``Pulse.i/q``,
 ``PulseSequence`` timing, ``ExecutionParameters.relaxation_time``), never from the
-driver. Each test is also run under planted driver bugs (:mod:`mutants`) that it must
+driver. Each test is also run under injected driver faults (:mod:`mutants`) that it must
 catch.
 
 Code under test: ElStabilini/qibolab@zi_drivers (e8757e58)

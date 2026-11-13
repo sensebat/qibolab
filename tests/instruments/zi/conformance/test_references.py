@@ -28,10 +28,10 @@ is added; review the diff of the JSON files like code. Never regenerate to make 
 failing test pass without reading the diff. A laboneq version without references is
 skipped.
 
-Each test runs under the planted bugs of mutants.py that change its reference. Two
+Each test runs under the injected faults of mutants.py that change its reference. Two
 bugs change none: ``phase_dropped`` (no checkpoint sets a pulse phase) and
 ``pulse_on_wrong_channel`` (it swaps q0 and q1 drive pulses, which are equal in every
-checkpoint). The frequency mutants leave CP1 and CP2 alone where the swept frequency
+checkpoint). The frequency faults leave CP1 and CP2 alone where the swept frequency
 replaces the static one. The checkpoint's own result checks are switched off while
 recording, so a caught bug is caught by the reference.
 

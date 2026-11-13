@@ -1,4 +1,9 @@
-"""Planted driver bugs, to show that each effect test can fail.
+"""Fault injection: driver faults, to show that each effect test can fail.
+
+Each fault is a hand-written driver bug with a meaning (swept amplitudes ignored,
+nested sweeps swapped, delays dropped); unlike mutation-testing tools such as mutmut
+or cosmic-ray, which make automatic mechanical code edits, every fault is chosen by
+hand. The code calls a fault a mutant (``MUTANTS``, ``@kills``).
 
 Each mutant is a function of a ``pytest.MonkeyPatch`` that patches the driver modules
 of ElStabilini/qibolab@zi_drivers (e8757e58) for one test; the source is never
@@ -9,7 +14,7 @@ The first five are the mutants that all ``play()`` tests of
 ElStabilini/qibolab@zi_drivers (e8757e58) tests/instruments/zi/test_play.py miss.
 TEETH.md lists, for each mutant, the tests of the whole ZI suite that it turns red.
 
-Pattern: mutation testing as in mutmut / cosmic-ray, applied by monkeypatch.
+Pattern: fault injection by monkeypatch; one run per fault as in mutation testing.
 """
 
 import inspect
@@ -600,16 +605,16 @@ def _first_line(error: Exception) -> str:
 
 
 def kills(*names: str, driver_marks=()):
-    """Run the test on the driver (must pass) and under each mutant (must fail).
+    """Run the test on the driver (must pass) and under each injected fault (must fail).
 
     ``driver_marks`` go on the ``driver`` case only, e.g. a strict xfail while the
-    driver itself does not pass yet; the mutant cases must still fail as planted.
+    driver itself does not pass yet; the fault cases must still fail.
 
-    The test gets one more parameter, ``driver`` or ``mutant-<name>``. Under a
-    mutant, the test must raise ``AssertionError`` (an assertion of the test, or
+    The test gets one more parameter, ``driver`` or ``fault-<name>``. Under a
+    fault, the test must raise ``AssertionError`` (an assertion of the test, or
     :class:`effects.Missing`), whose first line is printed. A ``LabOneQException``
     also counts for a mutant registered with ``laboneq_may_refuse``. Any other
-    exception is an error, and passing means the mutant survived.
+    exception is an error, and passing means the fault went unnoticed.
     """
     for name in names:
         assert name in MUTANTS, f"Unknown mutant '{name}'."
@@ -631,14 +636,16 @@ def kills(*names: str, driver_marks=()):
             try:
                 test(*args, **kwargs)
             except AssertionError as error:
-                print(f"mutant '{mutant}' caught: {_first_line(error)}")
+                print(f"injected fault '{mutant}' caught: {_first_line(error)}")
                 return
             except LabOneQException as error:
                 if not MUTANTS[mutant].laboneq_may_refuse:
                     raise
-                print(f"mutant '{mutant}' refused by LabOne Q: {_first_line(error)}")
+                print(
+                    f"injected fault '{mutant}' refused by LabOne Q: {_first_line(error)}"
+                )
                 return
-            pytest.fail(f"mutant '{mutant}' survived", pytrace=False)
+            pytest.fail(f"injected fault '{mutant}' went unnoticed", pytrace=False)
 
         wrapper.__name__ = test.__name__
         wrapper.__qualname__ = test.__qualname__
@@ -649,7 +656,7 @@ def kills(*names: str, driver_marks=()):
             parameters=[*signature.parameters.values(), *extra]
         )
         cases = [pytest.param(None, id="driver", marks=driver_marks)] + [
-            pytest.param(n, id=f"mutant-{n}") for n in names
+            pytest.param(n, id=f"fault-{n}") for n in names
         ]
         return pytest.mark.parametrize("mutant", cases)(wrapper)
 

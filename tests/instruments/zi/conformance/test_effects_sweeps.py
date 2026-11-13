@@ -10,7 +10,7 @@ Features F05-F12 (flux amplitude, duration, phase, offset sweeps) are refused by
 ElStabilini/qibolab@zi_drivers (e8757e58); their strict xfails in
 ``test_conformance.py`` cover them.
 
-The planted bugs, among them ``nested_sweepers_swapped`` and
+The injected faults, among them ``nested_sweepers_swapped`` and
 ``results_axes_not_moved`` for sweeper nesting and the results axes, are in
 :mod:`mutants`.
 """
