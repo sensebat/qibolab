@@ -35,7 +35,7 @@ def test_split(channels, configs):  # noqa: F811
     swept = {}
 
     near, real, axes = split(
-        [[drive], [amplitude], [probe]], channels, configs, calib, swept
+        [[drive], [amplitude], [probe]], [], channels, configs, calib, swept
     )
 
     # LabOne Q returns the near-time sweeps (1 and 2), the shots, then the drive (0)

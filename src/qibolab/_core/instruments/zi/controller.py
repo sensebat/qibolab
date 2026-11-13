@@ -527,7 +527,13 @@ class ZiController(Controller):
         swept: sweep.Swept = {}
         slots: pulse.Slots = {}
         near, real, axes = sweep.split(
-            sweepers, self.channels, configs, calib, swept, self.sampling_rate
+            sweepers,
+            sequences,
+            self.channels,
+            configs,
+            calib,
+            swept,
+            self.sampling_rate,
         )
         windows = pulse.windows(sequences, self.channels)
         layouts = [

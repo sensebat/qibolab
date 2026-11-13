@@ -11,7 +11,8 @@ from qibolab._core.components import (
     IqChannel,
 )
 from qibolab._core.identifier import ChannelId
-from qibolab._core.pulses import PulseId
+from qibolab._core.pulses import PulseId, Readout
+from qibolab._core.sequence import PulseSequence
 from qibolab._core.sweeper import ParallelSweepers, Parameter
 
 __all__ = []
@@ -23,16 +24,46 @@ NS = 1e-9
 """Qibolab times are in ns, LabOne Q ones in s."""
 
 _PULSES = {
-    Parameter.amplitude: (Parameter.amplitude, 1.0, False),
+    Parameter.amplitude: (Parameter.amplitude, 1.0, None),
     Parameter.duration: (Parameter.duration, NS, True),
     Parameter.duration_interpolated: (Parameter.duration, NS, True),
     Parameter.relative_phase: (Parameter.relative_phase, 1.0, True),
     Parameter.phase: (Parameter.phase, 1.0, True),
 }
-"""Swept pulse parameters: key in :data:`Swept`, scale to LabOne Q, real time."""
+"""Swept pulse parameters: key in :data:`Swept`, scale to LabOne Q, real time
+(``None``: on the channel's time scale, see :func:`_group`)."""
 
 Axes = list[int | None]
 """Qibolab sweeper of each axis of the LabOne Q results, ``None`` for the shots."""
+
+
+def _channels_of(sequences: list[PulseSequence]) -> dict[PulseId, ChannelId]:
+    """Channel each operation of the sequences is played on, by its id.
+
+    The probe and the acquisition of a :class:`Readout` are on its acquisition
+    channel, as the readout itself.
+    """
+    channels = {}
+    for sequence in sequences:
+        for id, op in sequence:
+            channels[op.id] = id
+            if isinstance(op, Readout):
+                channels[op.probe.id] = id
+                channels[op.acquisition.id] = id
+    return channels
+
+
+def _real_time(id: ChannelId, calibration: Calibration) -> bool:
+    """Whether a sweep of the channel ``id`` runs in real time.
+
+    It does if the channel's oscillator is modulated by the hardware (drive), and
+    not if it is modulated by the software (probe and acquisition): an SHFQA
+    generator cannot be swept in real time in integration mode.
+    """
+    oscillator = calibration[id].oscillator
+    return (
+        oscillator is not None and oscillator.modulation_type is ModulationType.HARDWARE
+    )
 
 
 def _group(
@@ -41,6 +72,7 @@ def _group(
     configs: dict[str, Config],
     calibration: Calibration,
     swept: Swept,
+    pulse_channels: dict[PulseId, ChannelId],
     sampling_rate: float | None = None,
 ) -> tuple[list[SweepParameter], bool]:
     """Sweep parameters of one group of parallel sweepers, and their execution type.
@@ -48,16 +80,18 @@ def _group(
     Supported sweeps:
 
     - frequency of a channel: the parameter replaces the frequency of the channel's
-      oscillator in ``calibration``. It runs in real time if the oscillator is
-      modulated by the hardware (drive), in near time if by the software (probe),
-      since an SHFQA generator cannot be swept in real time in integration mode;
+      oscillator in ``calibration``, and runs on the channel's time scale
+      (:func:`_real_time`);
     - offset of a DC channel: the parameter replaces the ``voltage_offset`` in
       ``calibration``, with absolute values, and runs in near time (it is a node
       setting);
     - parameters of pulses (:data:`_PULSES`): the parameter is recorded in
-      ``swept``, to be used when the pulse is played. Amplitude runs in near time;
-      duration (in s, also interpolated: both resample the envelope), relative
-      phase and the phase of a virtual Z run in real time.
+      ``swept``, to be used when the pulse is played. Amplitude runs on the time
+      scale of the channel the pulse is played on in the sequences
+      (``pulse_channels``), which for a :class:`Readout` and its probe is the
+      acquisition channel, so near time; a pulse not found there runs in near time. Duration (in s, also interpolated:
+      both resample the envelope), relative phase and the phase of a virtual Z run
+      in real time.
 
     A group that mixes near-time and real-time sweeps runs entirely in near time.
     Given ``sampling_rate`` (GSps), swept durations must be whole samples, as fixed
@@ -85,7 +119,7 @@ def _group(
                 lo = configs[channels[id].lo].frequency
                 oscillator.frequency = SweepParameter(values=sweeper.values - lo)
                 parameters.append(oscillator.frequency)
-                real_time.add(oscillator.modulation_type is ModulationType.HARDWARE)
+                real_time.add(_real_time(id, calibration))
         elif sweeper.parameter is Parameter.offset:
             for id in sweeper.channels:
                 if not isinstance(channels[id], DcChannel):
@@ -108,7 +142,13 @@ def _group(
             for pulse in sweeper.pulses:
                 swept[pulse.id, name] = SweepParameter(values=sweeper.values * scale)
                 parameters.append(swept[pulse.id, name])
-                real_time.add(rt)
+                if name is Parameter.amplitude:
+                    channel = pulse_channels.get(pulse.id)
+                    real_time.add(
+                        channel is not None and _real_time(channel, calibration)
+                    )
+                else:
+                    real_time.add(rt)
         else:
             raise NotImplementedError(
                 f"Sweeping {sweeper.parameter.name} is not supported."
@@ -118,6 +158,7 @@ def _group(
 
 def split(
     sweepers: list[ParallelSweepers],
+    sequences: list[PulseSequence],
     channels: dict[ChannelId, Channel],
     configs: dict[str, Config],
     calibration: Calibration,
@@ -128,7 +169,8 @@ def split(
 
     Each group of parallel sweepers becomes one list of sweep parameters, to be
     opened as a single LabOne Q sweep. See :func:`_group` for the supported sweeps
-    and for which of them run in real time.
+    and for which of them run in real time; ``sequences`` are the ones to be played,
+    which tell on which channel each swept pulse is.
 
     The last element maps the axes of the LabOne Q results, which are the near-time
     sweeps, then the shots, then the real-time ones, back to the qibolab sweepers.
@@ -137,9 +179,16 @@ def split(
     real: list[list[SweepParameter]] = []
     near_axes: Axes = []
     real_axes: Axes = []
+    pulse_channels = _channels_of(sequences)
     for index, group in enumerate(sweepers):
         parameters, real_time = _group(
-            group, channels, configs, calibration, swept, sampling_rate
+            group,
+            channels,
+            configs,
+            calibration,
+            swept,
+            pulse_channels,
+            sampling_rate,
         )
         if real_time:
             real.append(parameters)

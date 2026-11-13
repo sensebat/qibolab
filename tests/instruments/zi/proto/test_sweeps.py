@@ -95,7 +95,7 @@ def test_duration_lookup(channels, configs, parameter):  # noqa: F811
     (_, drive), (_, delay) = list(sequence)[:2]
     swept = {}
     duration = Sweeper(parameter=parameter, values=DURATIONS, pulses=[drive, delay])
-    split([[duration]], channels, configs, Calibration(), swept)
+    split([[duration]], [], channels, configs, Calibration(), swept)
 
     ops = operations(sequence, channels, configs, swept)
 
@@ -180,7 +180,7 @@ def test_relative_phase_lookup(channels, configs):  # noqa: F811
     drive = sequence[0][1]
     swept = {}
     phase = Sweeper(parameter=Parameter.relative_phase, values=PHASES, pulses=[drive])
-    _, real, _ = split([[phase]], channels, configs, Calibration(), swept)
+    _, real, _ = split([[phase]], [], channels, configs, Calibration(), swept)
 
     ops = operations(sequence, channels, configs, swept)
 
@@ -225,7 +225,7 @@ def test_virtual_z_phase_lookup(channels, configs):  # noqa: F811
     sequence, (vz,) = ramsey_vz([0])
     swept = {}
     phase = Sweeper(parameter=Parameter.phase, values=PHASES, pulses=[vz])
-    _, real, _ = split([[phase]], channels, configs, Calibration(), swept)
+    _, real, _ = split([[phase]], [], channels, configs, Calibration(), swept)
 
     ops = operations(sequence, channels, configs, swept)
 
@@ -256,7 +256,7 @@ def test_offset_split(channels, configs):  # noqa: F811
     calib = calibration(ids, channels, INSTRUMENTS, configs)
     offset = Sweeper(parameter=Parameter.offset, values=OFFSETS, channels=ids)
 
-    near, real, axes = split([[offset]], channels, configs, calib, {})
+    near, real, axes = split([[offset]], [], channels, configs, calib, {})
 
     assert real == [] and axes == [0, None]
     assert [calib[id].voltage_offset for id in ids] == near[0]
@@ -265,7 +265,7 @@ def test_offset_split(channels, configs):  # noqa: F811
         offset = Sweeper(
             parameter=Parameter.offset, values=OFFSETS, channels=["q0/drive"]
         )
-        split([[offset]], channels, configs, calib, {})
+        split([[offset]], [], channels, configs, calib, {})
 
 
 @pytest.mark.parametrize("averaging_mode", AVERAGING)
@@ -296,7 +296,7 @@ def test_flux_duration_lookup(channels, configs):  # noqa: F811
     flux = sequence[0][1]
     swept = {}
     duration = Sweeper(parameter=Parameter.duration, values=DURATIONS, pulses=[flux])
-    split([[duration]], channels, configs, Calibration(), swept)
+    split([[duration]], [], channels, configs, Calibration(), swept)
 
     ops = operations(sequence, channels, configs, swept)
 
@@ -322,10 +322,40 @@ def test_mixed_split(channels, configs):  # noqa: F811
     calib = calibration(ids, channels, INSTRUMENTS, configs)
     parallel = frequencies(configs, ["q0/drive", "q0/probe"])
 
-    near, real, axes = split([parallel], channels, configs, calib, {})
+    near, real, axes = split([parallel], [], channels, configs, calib, {})
 
     assert real == [] and axes == [0, None]
     assert near[0] == [calib[id].oscillator.frequency for id in ids[:2]]
+
+
+@pytest.mark.parametrize("target", ["drive", "readout", "probe", "absent"])
+def test_amplitude_split(channels, configs, target):  # noqa: F811
+    """An amplitude sweep runs on the time scale of the pulse's channel.
+
+    Drive pulse: real time. Readout, its probe, or a pulse in no sequence: near time.
+    """
+    ids = ["q0/drive", "q0/probe", "q0/acquisition"]
+    calib = calibration(ids, channels, INSTRUMENTS, configs)
+    sequence = drives([0])
+    readout = sequence.acquisitions[0][1]
+    pulse = {
+        "drive": sequence[0][1],
+        "readout": readout,
+        "probe": readout.probe,
+        "absent": Pulse(duration=40, amplitude=0.5, envelope=Rectangular()),
+    }[target]
+    amplitude = Sweeper(
+        parameter=Parameter.amplitude, values=np.array([0.1, 0.2]), pulses=[pulse]
+    )
+    swept = {}
+
+    near, real, axes = split([[amplitude]], [sequence], channels, configs, calib, swept)
+
+    parameter = swept[pulse.id, Parameter.amplitude]
+    if target == "drive":
+        assert real == [[parameter]] and near == [] and axes == [None, 0]
+    else:
+        assert near == [[parameter]] and real == [] and axes == [0, None]
 
 
 def mixed(configs, sequence):  # noqa: F811
@@ -379,7 +409,7 @@ def test_frequency_not_iq(channels, configs, id):  # noqa: F811
         parameter=Parameter.frequency, values=np.array([1.0, 2.0]), channels=[id]
     )
     with pytest.raises(ValueError, match=id):
-        split([[frequency]], channels, configs, calib, {})
+        split([[frequency]], [], channels, configs, calib, {})
 
 
 @pytest.mark.parametrize("parameter", [Parameter.duration, Parameter.relative_phase])
@@ -395,6 +425,6 @@ def test_probe_other_sweeps(channels, configs, parameter, probe):  # noqa: F811
     pulse = readout.probe if probe else readout
     swept = {}
     sweeper = Sweeper(parameter=parameter, values=np.array([1.0, 2.0]), pulses=[pulse])
-    split([[sweeper]], channels, configs, Calibration(), swept)
+    split([[sweeper]], [], channels, configs, Calibration(), swept)
     with pytest.raises(NotImplementedError, match="q0/acquisition"):
         operations(sequence, channels, configs, swept)
