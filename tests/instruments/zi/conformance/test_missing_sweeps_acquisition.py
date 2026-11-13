@@ -161,7 +161,11 @@ def sections(node):
         pytest.param(
             "probe",
             id="probe",
-            marks=missing("amplitude sweep given Readout.probe sweeps nothing"),
+            marks=missing(
+                "amplitude sweep given Readout.probe",
+                # zi_drivers e8757e58: nothing swept; faabbb45: KeyError
+                raises=(AssertionError, KeyError),
+            ),
         ),
     ],
 )
@@ -169,9 +173,11 @@ def test_probe_amplitude_sweep_given_probe(platform, target):
     """An amplitude sweeper whose ``pulses`` hold the readout's probe pulse plays
     q0's probe at the sweeper values, as when they hold the readout.
 
-    Today (audit G1) nothing is swept and no error is raised: the driver looks up
-    swept amplitudes by the id of the readout (zi/pulse.py:63), so the probe plays
-    its fixed amplitude.
+    Audit G1: the driver looks up swept amplitudes by the id of the readout
+    (zi/pulse.py:63). Up to zi_drivers e8757e58 nothing is swept and no error is
+    raised: the probe plays its fixed amplitude. From faabbb45 the call fails with a
+    ``KeyError`` (the probe's id): zi/sweep.py looks up the channel of each swept
+    pulse among the operations of the sequences, where only the readout is.
 
     Pattern: qibocal resonator_punchout (resonator_spectroscopies/
     resonator_punchout.py:123, qibocal b559e4a7) sweeps the readout;
