@@ -1,0 +1,167 @@
+{
+ "default": [
+  {
+   "experiments": [
+    {
+     "channels": {
+      "q0/acquisition": {
+       "frequency": [6998000000.0, 6999000000.0, 7000000000.0, 7001000000.0],
+       "lo": 6800000000.0,
+       "offset": null,
+       "ops": [
+        {
+         "acquire": {
+          "duration": 1000.0,
+          "kernel": {
+           "max": 1.0,
+           "n": 2000,
+           "sum": [2000.0, 0.0]
+          },
+          "readout": "0:q0/acquisition:0"
+         }
+        },
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": -30.0,
+       "waits_after_acquires": [1000.0]
+      },
+      "q0/flux": {
+       "frequency": null,
+       "lo": 0.0,
+       "offset": 0.1,
+       "ops": [
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": 5.0
+      },
+      "q0/probe": {
+       "frequency": [6998000000.0, 6999000000.0, 7000000000.0, 7001000000.0],
+       "lo": 6800000000.0,
+       "offset": null,
+       "ops": [
+        {
+         "play": {
+          "amplitude": 0.1,
+          "duration": 1000.0,
+          "phase": 0.0,
+          "samples": {
+           "max": 1.0,
+           "n": 2000,
+           "sum": [2000.0, 0.0]
+          }
+         }
+        },
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": 5.0
+      },
+      "q1/acquisition": {
+       "frequency": [6999000000.0, 7000000000.0, 7001000000.0, 7002000000.0],
+       "lo": 6800000000.0,
+       "offset": null,
+       "ops": [
+        {
+         "acquire": {
+          "duration": 1000.0,
+          "kernel": {
+           "max": 1.0,
+           "n": 2000,
+           "sum": [2000.0, 0.0]
+          },
+          "readout": "0:q1/acquisition:0"
+         }
+        },
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": -30.0,
+       "waits_after_acquires": [1000.0]
+      },
+      "q1/flux": {
+       "frequency": null,
+       "lo": 0.0,
+       "offset": 0.1,
+       "ops": [
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": 5.0
+      },
+      "q1/probe": {
+       "frequency": [6999000000.0, 7000000000.0, 7001000000.0, 7002000000.0],
+       "lo": 6800000000.0,
+       "offset": null,
+       "ops": [
+        {
+         "play": {
+          "amplitude": 0.1,
+          "duration": 1000.0,
+          "phase": 0.0,
+          "samples": {
+           "max": 1.0,
+           "n": 2000,
+           "sum": [2000.0, 0.0]
+          }
+         }
+        },
+        {
+         "delay": 1000.0
+        }
+       ],
+       "range": 5.0
+      }
+     },
+     "execution": {
+      "acquisition_type": "INTEGRATION",
+      "averaging_mode": "CYCLIC",
+      "nshots": 10
+     },
+     "sweeps": [
+      {
+       "parameters": [
+        {
+         "drives": [
+          "q0/acquisition.frequency",
+          "q0/probe.frequency"
+         ],
+         "values": [198000000.0, 199000000.0, 200000000.0, 201000000.0]
+        },
+        {
+         "drives": [
+          "q1/acquisition.frequency",
+          "q1/probe.frequency"
+         ],
+         "values": [199000000.0, 200000000.0, 201000000.0, 202000000.0]
+        }
+       ],
+       "real_time": false
+      }
+     ],
+     "unmapped_signals": 0
+    }
+   ],
+   "results": {
+    "0:q0/acquisition:0": [
+     [4.2, 0.0],
+     [4.2, 0.0],
+     [4.2, 0.0],
+     [4.2, 0.0]
+    ],
+    "0:q1/acquisition:0": [
+     [4.3, 0.0],
+     [4.3, 0.0],
+     [4.3, 0.0],
+     [4.3, 0.0]
+    ]
+   }
+  }
+ ]
+}
