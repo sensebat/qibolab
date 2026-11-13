@@ -6,6 +6,8 @@ Fault injection: each fault is a hand-written driver bug with a meaning (swept a
 
 Caught by: `assertion` = at least one test fails on an assertion (or a strict xfail no longer holds); `LabOne Q refusal only` = only LabOne Q rejects the experiment; `crash only` = tests fail with other exceptions only. A fault no test turns red is a gap.
 
+Left out because they do not pass on the driver itself: `tests/instruments/zi/conformance/test_effects_sweeps.py::test_nested_drive_sweepers_grid[fault-nested_sweepers_swapped]`, `tests/instruments/zi/test_sweep.py::test_split`.
+
 ## Summary
 
 39 of 39 injected faults turn at least one test red. No gaps.
@@ -16,13 +18,13 @@ Caught by: `assertion` = at least one test fails on an assertion (or a strict xf
 | `relaxation_zero` | relaxation time is 0 | assertion | 0 | 0 | 8 |
 | `phase_dropped` | relative phase of pulses is dropped | assertion | 1 | 0 | 3 |
 | `results_q_is_i` | results: Q is replaced by I | assertion | 1 | 0 | 14 |
-| `sweep_grid_reversed` | sweep values are reversed | assertion | 5 | 0 | 17 |
+| `sweep_grid_reversed` | sweep values are reversed | assertion | 4 | 0 | 17 |
 | `pulse_on_wrong_channel` | pulses on a drive channel are played on the drive of another qubit | assertion | 1 | 0 | 5 |
 | `drive_signal_misrouted` | drive signals are mapped to the logical signal of the next qubit's drive | assertion | 9 | 0 | 23 |
 | `flux_signal_misrouted` | flux signals are mapped to the logical signal of the next qubit's flux | assertion | 1 | 0 | 2 |
 | `readout_probe_swapped` | the probe pulses of the first two readouts are swapped between qubits | assertion | 4 | 3 | 5 |
 | `unused_dc_channels_dropped` | DC channels unused by the sequences are left out of the experiment | assertion | 3 | 1 | 9 |
-| `frequency_sweep_offset` | frequency sweep values are offset by one step | assertion | 3 | 0 | 12 |
+| `frequency_sweep_offset` | frequency sweep values are offset by one step | assertion | 2 | 0 | 12 |
 | `nested_sweepers_swapped` | nested sweepers are run in reverse order (grid transposed) | assertion | 2 | 2 | 4 |
 | `lo_not_subtracted` | the LO frequency is not subtracted from the oscillator frequency | assertion | 1 | 0 | 8 |
 | `lo_sign_flipped` | the oscillator frequency is LO - frequency instead of frequency - LO | assertion | 1 | 0 | 8 |
@@ -44,12 +46,12 @@ Caught by: `assertion` = at least one test fails on an assertion (or a strict xf
 | `acquisition_type_discrimination` | LabOne Q acquires in DISCRIMINATION mode instead of INTEGRATION | assertion | 0 | 0 | 7 |
 | `acquisition_type_unchecked` | any acquisition type runs as INTEGRATION | assertion | 5 | 1 | 1 |
 | `averaging_mode_unchecked` | any averaging mode runs as CYCLIC | assertion | 6 | 5 | 5 |
-| `refusal_messages_vague` | refusals do not say what is not supported | assertion | 19 | 16 | 4 |
+| `refusal_messages_vague` | refusals do not say what is not supported | assertion | 21 | 16 | 4 |
 | `fast_reset_ignored` | fast_reset is accepted and ignored | assertion | 2 | 1 | 1 |
 | `unsupported_sweepers_dropped` | sweepers of parameters other than frequency and amplitude are dropped | assertion | 7 | 7 | 1 |
 | `kernel_ignored` | integration kernels in acquisition configs are ignored (unit weights) | assertion | 1 | 1 | 1 |
-| `results_axes_reshaped` | results are reshaped to the qibolab shape instead of moving the axes | assertion | 0 | 0 | 2 |
-| `results_axes_not_moved` | results keep the LabOne Q axis order (near time, shots, real time) | assertion | 2 | 1 | 2 |
+| `results_axes_reshaped` | results are reshaped to the qibolab shape instead of moving the axes | assertion | 0 | 0 | 1 |
+| `results_axes_not_moved` | results keep the LabOne Q axis order (near time, shots, real time) | assertion | 2 | 1 | 1 |
 | `acquisition_handles_swapped` | acquisition handles are swapped between the first two readouts | assertion | 0 | 0 | 10 |
 
 Counts are test functions (all parametrized cases of one function count once).
@@ -134,7 +136,6 @@ sweep values are reversed.
   - `test_missing_sweeps_acquisition.py::test_parallel_sweepers_mixed_timing` (1 case; AssertionError)
   - `test_missing_sweeps_acquisition.py::test_probe_amplitude_sweep_given_probe` (1 case; AssertionError)
   - `test_missing_sweeps_acquisition.py::test_sequential_averaging` (1 case; AssertionError)
-  - `test_sweep.py::test_split` (1 case; AssertionError)
 - contract tests (test_conformance.py, test_checkpoints.py): none
 - effect tests (test_effects_*.py, test_references.py):
   - `test_effects_acquisition.py::test_result_axes_follow_sweepers` (2 cases; AssertionError)
@@ -268,7 +269,6 @@ frequency sweep values are offset by one step.
 - driver tests (tests/instruments/zi/test_*.py):
   - `test_missing_sweeps_acquisition.py::test_parallel_sweepers_mixed_timing` (1 case; AssertionError)
   - `test_missing_sweeps_acquisition.py::test_sequential_averaging` (1 case; AssertionError)
-  - `test_sweep.py::test_split` (1 case; IndexError)
 - contract tests (test_conformance.py, test_checkpoints.py): none
 - effect tests (test_effects_*.py, test_references.py):
   - `test_effects_acquisition.py::test_result_axes_follow_sweepers` (2 cases; Missing)
@@ -296,7 +296,7 @@ nested sweepers are run in reverse order (grid transposed).
   - `test_conformance.py::test_nested_sweepers` (1 case; AssertionError)
 - effect tests (test_effects_*.py, test_references.py):
   - `test_effects_acquisition.py::test_result_axes_follow_sweepers` (2 cases; AssertionError)
-  - `test_effects_sweeps.py::test_nested_drive_sweepers_grid` (1 case; AssertionError)
+  - `test_effects_sweeps.py::test_nested_drive_sweepers_grid` (1 case; LabOneQException)
   - `test_effects_sweeps.py::test_nested_probe_sweepers_grid` (1 case; AssertionError)
   - `test_references.py::test_cp2_reference` (1 case; AssertionError)
 
@@ -697,6 +697,8 @@ any averaging mode runs as CYCLIC.
 refusals do not say what is not supported.
 
 - driver tests (tests/instruments/zi/test_*.py):
+  - `test_missing_infra.py::test_default_execute_options` (1 case; NotImplementedError)
+  - `test_missing_infra.py::test_parallel_drive_and_probe_frequency` (1 case; NotImplementedError)
   - `test_missing_pulses.py::test_flux_filters_reach_precompensation` (1 case; NotImplementedError)
   - `test_missing_pulses.py::test_kernel_weights_reach_acquire` (1 case; NotImplementedError)
   - `test_missing_pulses.py::test_probe_and_acquisition_separate` (1 case; NotImplementedError)
@@ -793,7 +795,6 @@ results are reshaped to the qibolab shape instead of moving the axes.
 - contract tests (test_conformance.py, test_checkpoints.py): none
 - effect tests (test_effects_*.py, test_references.py):
   - `test_effects_acquisition.py::test_result_axes_follow_sweepers` (2 cases; AssertionError)
-  - `test_effects_sweeps.py::test_nested_drive_sweepers_grid` (1 case; AssertionError)
 
 ### `results_axes_not_moved`
 
@@ -806,7 +807,6 @@ results keep the LabOne Q axis order (near time, shots, real time).
   - `test_conformance.py::test_single_shots_with_sweeper` (1 case; AssertionError)
 - effect tests (test_effects_*.py, test_references.py):
   - `test_effects_acquisition.py::test_result_axes_follow_sweepers` (2 cases; AssertionError)
-  - `test_effects_sweeps.py::test_nested_drive_sweepers_grid` (1 case; AssertionError)
 
 ### `acquisition_handles_swapped`
 
