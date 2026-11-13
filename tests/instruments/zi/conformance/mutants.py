@@ -298,9 +298,10 @@ def unused_dc_channels_dropped(mp):
 def frequency_sweep_offset(mp):
     original = sweep._group
 
-    def group(sweeper_group, channels, configs, calibration, amplitudes):
+    # ``*rest``: the sequences' pulse channels, an argument since zi_drivers faabbb45
+    def group(sweeper_group, channels, configs, calibration, amplitudes, *rest):
         parameters, real_time = original(
-            sweeper_group, channels, configs, calibration, amplitudes
+            sweeper_group, channels, configs, calibration, amplitudes, *rest
         )
         frequency = [s for s in sweeper_group if s.parameter is Parameter.frequency]
         if frequency:

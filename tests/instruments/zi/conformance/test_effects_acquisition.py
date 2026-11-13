@@ -367,6 +367,7 @@ def test_results_of_several_sequences(platform):
 )
 @kills(
     "results_axes_reshaped",
+    "results_axes_not_moved",
     "sweep_grid_reversed",
     "frequency_sweep_offset",
     "results_q_is_i",
