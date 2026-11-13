@@ -1,22 +1,27 @@
 """Build the zi-driver report (index.html) and state.json from the cells.
 
 Usage: python3 ci/report.py CELLS_DIR OUT_DIR [--summary MARKDOWN_FILE] [--when TEXT]
+                            [--checks CHECKS_DIR]
 
 CELLS_DIR holds one folder per cell (cell-r1-c1 ... cell-r2-c2, cell-x-c1, cell-x-c2 for an
 extra row) with meta.json and, when the tests ran, junit.xml (written by ci/run_cell.sh).
 OUT_DIR gets index.html and state.json. Run facts come from the environment (set by the
 workflow; the cells' meta.json fills gaps):
-  KEY, RUN_URL, MATRIX, R1_SHA, R2_SHA, CI_SHA, LABONEQ_PINNED, LABONEQ_LATEST,
+  KEY, RUN_URL, CHECKS_URL, MATRIX, R1_SHA, R2_SHA, CI_SHA, LABONEQ_PINNED, LABONEQ_LATEST,
   R1_REPO, R1_REF, R2_REPO, R2_REF, SUITE_REPO, SUITE_REF, EXTRA_REPO, EXTRA_REF, EXTRA_SHA
 Target cells (R1 x pinned, R2 x latest) must be green; state.json["targets"] holds their
-results for ci/gate.py. --summary appends the headline, the grid, the failed tests and the
-feature table as Markdown (for $GITHUB_STEP_SUMMARY). Standard library only.
+results for ci/gate.py. --summary appends the headline, the grid and the feature table as
+Markdown (for $GITHUB_STEP_SUMMARY). --checks holds check-<cell>/url.txt, the test-result
+check of each cell (EnricoMi/publish-unit-test-result-action, zi-driver workflow job
+"checks"); the grid links there. Failed tests with message and traceback are listed in those
+checks, not here. Standard library only.
 """
 
 import argparse
 import html
 import json
 import os
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -86,7 +91,7 @@ def counts(cases: list[dict]) -> dict[str, int]:
 
 
 class Run:
-    def __init__(self, cells: dict[str, dict], when: str):
+    def __init__(self, cells: dict[str, dict], when: str, checks: dict[str, str] | None = None):
         e = os.environ
         metas = [c["meta"] for c in cells.values()]
 
@@ -97,7 +102,9 @@ class Run:
 
         self.cells = cells
         self.when = when
+        self.checks = checks or {}
         self.run_url = e.get("RUN_URL", "")
+        self.checks_url = e.get("CHECKS_URL", "")
         self.key = e.get("KEY", "")
         self.r1_repo = e.get("R1_REPO", "ElStabilini/qibolab")
         self.r1_ref = e.get("R1_REF", "zi_drivers")
@@ -264,11 +271,15 @@ def grid(run: Run) -> str:
             if state.get("conflicts"):
                 files = "<div class='small mono'>" + "<br>".join(esc(f) for f in state["conflicts"]) + "</div>"
             css = f"{CSS_CLASS[state['result']]} {'target' if cell_id in TARGETS else 'info'}"
+            check = run.checks.get(cell_id, "")
+            text = f"<a href='{esc(check)}'><b>{esc(state['text'])}</b></a>" if check else f"<b>{esc(state['text'])}</b>"
+            link = f"<div class=small><a href='{esc(check)}'>test results</a></div>" if check else ""
             tds.append(
                 f"<td class='{css}' data-label='{esc(col_title(run, col))}'>"
                 f"<div class=role>{role(cell_id)}</div>"
-                f"<a href='#{cell_id}'><b>{esc(state['text'])}</b></a>{files}"
+                f"{text}{files}"
                 + (f"<div class='small mono'>{esc(detail)}</div>" if detail else "")
+                + link
                 + "</td>"
             )
         body.append(f"<tr><th scope=row><b>{row.upper()}</b> {row_html(run, row)}</th>{''.join(tds)}</tr>")
@@ -292,16 +303,17 @@ def ran(run: Run, cell_id: str) -> list[dict] | None:
 
 
 def is_mutant_case(case: dict) -> bool:
-    """A case of an effect test run under a planted driver bug (``[...mutant-<name>]``)."""
-    return "mutant-" in case["name"].partition("[")[2]
+    """A case of an effect test run under an injected driver fault (``[...fault-<name>]``;
+    ``mutant-<name>`` in results from ci-rc1)."""
+    return re.search(r"(?:^|-)(?:fault|mutant)-", case["name"].partition("[")[2]) is not None
 
 
 def kind(case: dict) -> str:
-    """driver test | contract | effect | planted bug."""
+    """driver test | contract | effect | fault injection."""
     if not case["conformance"]:
         return "driver test"
     if is_mutant_case(case):
-        return "planted bug"
+        return "fault injection"
     return case["props"].get("kind", "contract")
 
 
@@ -332,7 +344,7 @@ def tally(cases: list[dict]) -> tuple[str, str, str]:
 
 
 def caught(mutants: list[dict]) -> tuple[int, int]:
-    """Planted-bug runs that turned the test red (outcome passed), of all."""
+    """Fault-injection runs that turned the test red (outcome passed), of all."""
     return sum(c["outcome"] == "passed" for c in mutants), len(mutants)
 
 
@@ -356,9 +368,9 @@ def effect_chip(cases: list[dict], mutants: list[dict], listed: list[str] | None
     title = f"effect tests: {long}"
     if mutants:
         hit, total = caught(mutants)
-        title += f"; planted bugs: {hit} of {total} runs red"
+        title += f"; injected faults: {hit} of {total} runs red"
         if hit < total and css != "bad":
-            css, text = "bad", f"✗ {total - hit} bug{'s' if total - hit > 1 else ''} missed"
+            css, text = "bad", f"✗ {total - hit} fault{'s' if total - hit > 1 else ''} missed"
     return chip(css, "effect", text, title)
 
 
@@ -385,7 +397,7 @@ def what_ran(run: Run) -> str:
         ("driver test", "Driver tests", "tests/instruments/zi/*.py at the row's commit"),
         ("contract", "Contract tests", "conformance suite: keys, shapes, refusals"),
         ("effect", "Effect tests", "conformance suite: what LabOne Q gets, incl. CP1-CP5 references"),
-        ("planted bug", "Planted-bug runs", "each effect test under the bugs it names; must turn red"),
+        ("fault injection", "Fault-injection runs", "each effect test under the faults it names; must turn red"),
     ]
     body = []
     for key, title, what in groups:
@@ -396,7 +408,7 @@ def what_ran(run: Run) -> str:
                 tds.append("<td class=muted>-</td>")
                 continue
             of_kind = [c for c in cases if kind(c) == key]
-            if key == "planted bug":
+            if key == "fault injection":
                 hit, total = caught(of_kind)
                 css = "o-passed" if hit == total else "o-failed"
                 tds.append(f"<td class={css}>{hit} of {total} red</td>" if total else "<td class=muted>none</td>")
@@ -466,7 +478,7 @@ def effect_checks(run: Run) -> str:
             cases = per_cell[cid].get(fid, [])
             contract = [c for c in cases if kind(c) == "contract"]
             effect = [c for c in cases if kind(c) == "effect"]
-            mutants = [c for c in cases if kind(c) == "planted bug"]
+            mutants = [c for c in cases if kind(c) == "fault injection"]
             e_chip = effect_chip(effect, mutants, info["effects"])
             if "chip ok" in e_chip:
                 green[cid] += 1
@@ -490,15 +502,19 @@ def effect_checks(run: Run) -> str:
         "<b>contract</b>: the qibolab interface keeps its promises (keys, shapes, refusals). "
         "<b>effect</b>: what the qibolab call makes LabOne Q do, read from the experiment the driver "
         "hands to LabOne Q (amplitudes, frequencies, sweep values, waits, results), and the effect "
-        "tests turn red under each planted driver bug they name "
-        "(tests/instruments/zi/conformance/mutants.py, matrix in TEETH.md).</p>"
+        "tests turn red under each injected driver fault they name.</p>"
+        "<p class=muted><b>Fault injection</b>: hand-written driver bugs with a meaning (swept "
+        "amplitudes ignored, nested sweeps swapped, delays dropped), each patched into the driver "
+        "for one test run (tests/instruments/zi/conformance/mutants.py, matrix in TEETH.md); "
+        "unlike mutation-testing tools such as mutmut, which make automatic mechanical code "
+        "edits.</p>"
         "<p class='legend small'>"
         + chip("ok", "", "✓", "")
         + " all pass "
         + chip("warn", "", "not yet", "")
         + " strict expected failure: refused or not implemented yet "
         + chip("bad", "", "✗", "")
-        + " a test failed or a planted bug went unnoticed "
+        + " a test failed or an injected fault went unnoticed "
         + chip("none", "", "none yet", "")
         + " no such test. Hover a chip for counts.</p>"
     )
@@ -522,7 +538,7 @@ def reference_chip(cases: list[dict]) -> str:
     outcomes = {c["outcome"] for c in driver}
     message = next((c["message"] for c in driver if c["message"]), "")
     hit, total = caught(mutants)
-    bugs = f"; planted bugs: {hit} of {total} runs red" if total else ""
+    bugs = f"; injected faults: {hit} of {total} runs red" if total else ""
     if outcomes & {"failed", "error"}:
         return chip("bad", "reference", "changed", (message or "differs from the reference file") + bugs)
     if outcomes == {"passed"}:
@@ -581,50 +597,6 @@ def references(run: Run) -> str:
     )
 
 
-# ---------------------------------------------------------------- failed tests
-
-
-def failed_section(run: Run) -> str:
-    parts = [
-        (
-            "<h2 id=failed>Failed tests</h2>"
-            "<p class=muted>Per cell, with the first line of the message. "
-            "A planted-bug run fails when the bug went unnoticed.</p>"
-        )
-    ]
-    for row in run.rows:
-        for col in COLS:
-            cell_id = f"{row}-{col}"
-            state = cell_state(run, cell_id)
-            title = f"{row.upper()} × {col_title(run, col)} · {role(cell_id)}"
-            version = col_version(run, col)
-            head = (
-                f"<h3 id={cell_id}>{esc(title)}"
-                + (f" <span class='muted mono small'>{esc(version)}</span>" if version else "")
-                + f" <span class='pill {CSS_CLASS[state['result']]}'>{esc(state['result'])}</span></h3>"
-            )
-            cell = run.cells.get(cell_id)
-            if state["result"] == "merge conflict":
-                files = "".join(f"<li class=mono>{esc(f)}</li>" for f in state.get("conflicts", []))
-                parts.append(f"{head}<p>{esc(row_text(run, row))} does not merge. Files:</p><ul>{files}</ul>")
-            elif cell is None or cell["cases"] is None:
-                parts.append(f"{head}<p class=muted>{esc(state['text'])}.</p>")
-            else:
-                bad = [c for c in cell["cases"] if c["outcome"] in ("failed", "error")]
-                if not bad:
-                    parts.append(f"{head}<p class=muted>None.</p>")
-                    continue
-                items = "".join(
-                    f"<li><span class=tag>{esc(kind(c))}</span> "
-                    f"<span class=mono>{esc(c['file'])}::{esc(c['name'])}</span>"
-                    + (" <span class=o-failed>error</span>" if c["outcome"] == "error" else "")
-                    + f"<div class=msg>{esc(c['message'] or '(no message)')}</div></li>"
-                    for c in bad
-                )
-                parts.append(f"{head}<ul class=fails>{items}</ul>")
-    return "".join(parts)
-
-
 CSS = """
 :root{--bg:#fbfbfa;--fg:#1d1d1b;--muted:#6b6b66;--line:#ddddd8;--card:#fff;
 --good:#e3f2e6;--good-fg:#1e5b2c;--bad:#fbe4e2;--bad-fg:#8a1f17;--warn:#f8efd2;--warn-fg:#6b5300;--none:#f1f1ee}
@@ -639,9 +611,8 @@ main{max-width:1040px;margin:0 auto}p,h3{overflow-wrap:anywhere}h1{font-size:22p
 h2{font-size:18px;margin:32px 0 6px;padding-top:12px;border-top:1px solid var(--line)}
 h3{font-size:15px;margin:18px 0 4px}a{color:inherit}.muted{color:var(--muted)}
 nav{font-size:13.5px;margin:6px 0 14px;color:var(--muted)}nav a{margin-right:12px}
-.mono,.msg{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;overflow-wrap:anywhere}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;overflow-wrap:anywhere}
 .small{font-size:12.5px;margin-top:2px}
-.msg{color:var(--muted);margin:2px 0 8px}
 table{border-collapse:collapse;background:var(--card);width:100%}
 th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
 .grid th[scope=row]{font-weight:400;width:34%}.grid td a{text-decoration:none}
@@ -653,9 +624,7 @@ th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-ali
 .role{font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-bottom:2px}
 .headline{font-size:16px;font-weight:600;padding:8px 12px;border-radius:6px;margin:10px 0 8px}
 th.cellhead.target{font-weight:700}
-.pill{font-size:12px;font-weight:600;padding:1px 8px;border-radius:10px;vertical-align:middle}
 .scroll{overflow-x:auto;margin:8px 0;-webkit-overflow-scrolling:touch}
-ul.fails{padding-left:20px}ul.fails li{overflow-wrap:anywhere}
 .counts{min-width:640px}.counts th,.counts td{font-size:13.5px;padding:6px 8px}.counts th[scope=row]{font-weight:600}
 .effects{min-width:760px}.effects td,.effects th{padding:5px 8px;font-size:13.5px}
 .effects td.id,.effects th.id{white-space:nowrap;overflow-wrap:normal;position:sticky;left:0;background:var(--card)}
@@ -668,7 +637,6 @@ th.cellhead{white-space:nowrap;font-size:13px}
 .chip.bad{background:var(--bad);color:var(--bad-fg)}.chip.warn{background:var(--warn);color:var(--warn-fg)}
 .chip.none{background:var(--none);color:var(--muted)}
 .legend .chip{margin:0 2px}
-.tag{font-size:11.5px;padding:0 6px;border-radius:8px;background:var(--none);color:var(--muted);white-space:nowrap}
 .o-failed{color:var(--bad-fg);font-weight:600}.o-passed{color:var(--good-fg)}
 .note{margin:8px 0 0;color:var(--muted);font-size:13.5px}
 details summary{cursor:pointer;color:var(--muted);font-size:12.5px}details ul{margin:4px 0;padding-left:18px;font-size:12px}
@@ -691,6 +659,15 @@ def headline(run: Run) -> str:
     )
 
 
+def failed_note(run: Run) -> str:
+    """Where the failed tests are: one test-result check per cell, linked from the grid."""
+    commit = f" (<a href='{esc(run.checks_url)}'>all checks of the commit</a>)" if run.checks_url else ""
+    return (
+        "Failed tests, with message and traceback: the check <i>ZI tests &lt;cell&gt;</i> of each "
+        f"cell, linked as <i>test results</i> in the grid{commit}."
+    )
+
+
 def page(run: Run) -> str:
     link = f'<a href="{esc(run.run_url)}">{esc(run.run_url.rsplit("/", 1)[-1])}</a>' if run.run_url else "local"
     note = (
@@ -703,9 +680,10 @@ def page(run: Run) -> str:
         "LabOne Q emulation, no hardware. Row's uv.lock installed, then laboneq set to the column's "
         "version (zhinst-* follow). Not implemented yet = strict expected failure; it turns red if it passes."
     )
+    checks = f"<a href='{esc(run.checks_url)}'>Test-result checks</a>" if run.checks_url else ""
     nav = (
         "<nav><a href='#effects'>Effect checks</a><a href='#references'>CP1-CP5 reference files</a>"
-        "<a href='#failed'>Failed tests</a></nav>"
+        f"{checks}</nav>"
     )
     return (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
@@ -713,7 +691,8 @@ def page(run: Run) -> str:
         f"<title>ZI driver tests</title><style>{CSS}</style></head><body><main>"
         f"<h1>ZI driver tests</h1>{nav}{headline(run)}"
         f"<div class=scroll>{grid(run)}</div><p class=note>{note}</p><p class=note>{suite}</p>"
-        f"{what_ran(run)}{effect_checks(run)}{references(run)}{failed_section(run)}"
+        f"<p class=note>{failed_note(run)}</p>"
+        f"{what_ran(run)}{effect_checks(run)}{references(run)}"
         "</main></body></html>"
     )
 
@@ -762,27 +741,6 @@ def summary_grid(run: Run) -> list[str]:
     return lines
 
 
-def summary_failed(run: Run, limit: int = 40) -> list[str]:
-    lines = ["#### Failed tests", ""]
-    for cid in run.cell_ids:
-        cases = ran(run, cid)
-        if cases is None:
-            continue
-        bad = [c for c in cases if c["outcome"] in ("failed", "error")]
-        if not bad:
-            continue
-        lines.append(f"**{label(cid)}** ({role(cid)}): {len(bad)}")
-        lines.append("")
-        for c in bad[:limit]:
-            lines.append(f"- {kind(c)} `{c['file']}::{c['name']}`: {md(c['message'] or '(no message)')}")
-        if len(bad) > limit:
-            lines.append(f"- ... {len(bad) - limit} more in the test-report artifact")
-        lines.append("")
-    if len(lines) == 2:
-        lines += ["None.", ""]
-    return lines
-
-
 def summary_features(run: Run) -> list[str]:
     features, per_cell = collect_features(run)
     if not features:
@@ -803,10 +761,10 @@ def summary_features(run: Run) -> list[str]:
             for k in ("contract", "effect"):
                 group = [c for c in cases if kind(c) == k]
                 parts.append(tally(group)[1] if group else "-")
-            mutants = [c for c in cases if kind(c) == "planted bug"]
+            mutants = [c for c in cases if kind(c) == "fault injection"]
             hit, total = caught(mutants)
             if hit < total:
-                parts[1] += f" ({total - hit} bug{'s' if total - hit > 1 else ''} missed)"
+                parts[1] += f" ({total - hit} fault{'s' if total - hit > 1 else ''} missed)"
             tds.append(" / ".join(parts))
         lines.append(f"| {fid} | {md(info['title'])} | {info['cp'] or '-'} | " + " | ".join(tds) + " |")
     lines.append("")
@@ -816,7 +774,9 @@ def summary_features(run: Run) -> list[str]:
 def summary_markdown(run: Run) -> str:
     t = run.targets()
     lines = ["### ZI driver tests", "", f"**{t['headline']}**", ""] + summary_grid(run) + [""]
-    lines += summary_failed(run) + summary_features(run)
+    lines += ["Failed tests, with message and traceback: the check `ZI tests <cell>` of each cell "
+              "(its job summary is in this run).", ""]
+    lines += summary_features(run)
     lines += ["Report: artifact `test-report` (index.html); on orkun/ci also https://sensebat.github.io/qibolab/.", ""]
     return "\n".join(lines)
 
@@ -827,6 +787,7 @@ def main() -> int:
     parser.add_argument("out_dir", type=Path)
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--when", default="")
+    parser.add_argument("--checks", type=Path, help="folder with check-<cell>/url.txt")
     args = parser.parse_args()
 
     cells = {}
@@ -835,7 +796,12 @@ def main() -> int:
         cell = read_cell(folder)
         if cell is not None:
             cells[cell["meta"]["cell"]] = cell
-    run = Run(cells, args.when)
+    checks = {}
+    if args.checks and args.checks.is_dir():
+        for url in args.checks.glob("check-*/url.txt"):
+            if url.read_text().strip():
+                checks[url.parent.name.removeprefix("check-")] = url.read_text().strip()
+    run = Run(cells, args.when, checks)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "index.html").write_text(page(run))
     (args.out_dir / "state.json").write_text(json.dumps(state_json(run), indent=2) + "\n")

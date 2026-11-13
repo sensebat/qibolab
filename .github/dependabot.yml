@@ -1,0 +1,25 @@
+# Dependabot version updates: a pull request against sensebat/qibolab@orkun/26.10 when a new
+# laboneq is on PyPI. The zi-driver workflow runs the R2 cells on that pull request
+# (pull_request to orkun/26.10).
+#
+# Not active yet. Dependabot reads this file only from the default branch (orkun/ci), and a
+# fork needs version updates enabled by hand (Settings, Advanced Security, Dependabot
+# version updates: Enable). Details: ci/README.md, "New laboneq releases".
+# Options: https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    # Checks pyproject.toml and uv.lock of orkun/26.10, opens the pull requests against it.
+    target-branch: orkun/26.10
+    schedule:
+      interval: daily
+      time: "05:17"
+    allow:
+      - dependency-name: laboneq
+    # laboneq is pinned to one minor version (">=26.10,<26.11" in the zi dependency group);
+    # "increase" raises the requirement to the new release.
+    versioning-strategy: increase
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "deps(zi)"

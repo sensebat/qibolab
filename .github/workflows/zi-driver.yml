@@ -8,22 +8,30 @@
 #   C1  laboneq pinned: the version in the uv.lock of ElStabilini/qibolab@zi_drivers
 #   C2  laboneq latest: the newest laboneq on PyPI
 # Targets (must be green): R1 x pinned and R2 x latest. R1 x latest and R2 x pinned are
-# information: red there is shown but does not fail the run. The gate job decides the run.
+# information: red there is shown but does not fail the run or the commit status. The gate
+# job decides the run.
+# Test results: job "checks" publishes one check per cell, "ZI tests <cell> (<role>)", with
+# the failed tests as annotations (EnricoMi/publish-unit-test-result-action). A target check
+# fails on a failed test; an information check is set to neutral instead (grey, not red).
 # An extra row X (no merge) runs an orkun/proto-* branch or the extra_ref dispatch input.
 # Each cell installs the row's uv.lock, replaces laboneq by the column's version (zhinst-*
 # follow, every other package as locked) and runs tests/instruments/zi plus the conformance
 # suite of sensebat/qibolab@orkun/ci. A cell is red when a test fails.
 #
 # Triggers:
-#   schedule (every 30 min)      runs only when the key (R1, R2, orkun/ci commits + newest
-#                                laboneq) differs from the published state.json; GitHub does
-#                                not fire it in this fork (ci/README.md), see zi-check below
+#   schedule (:17 and :47)       runs only when the key (R1, R2, orkun/ci commits + newest
+#                                laboneq) differs from the published state.json; GitHub fires
+#                                it rarely here (ci/README.md), see zi-check below
 #   repository_dispatch zi-check same check as the schedule, on the default branch
 #   workflow_dispatch            always runs (only_if_changed: behave like the schedule;
 #                                extra_ref: add that ref as row X)
 #   push to orkun/ci             always runs
 #   push to orkun/26.10          only the R2 cells for that commit; no Pages
 #   push to orkun/proto-*        R1, R2 and the branch as row X; no Pages
+#   pull_request to orkun/26.10  the R2 cells for the pull request's head (e.g. a Dependabot
+#                                laboneq bump, .github/dependabot.yml); no Pages. The workflow
+#                                file comes from the pull request's merge commit, so this
+#                                needs orkun/26.10 to have merged this file.
 # Pages (https://sensebat.github.io/qibolab/, index.html + state.json) are published only by
 # runs on orkun/ci with rows R1 and R2 and no extra row.
 name: zi-driver
@@ -31,9 +39,15 @@ name: zi-driver
 on:
   push:
     branches: [orkun/ci, orkun/26.10, "orkun/proto-*"]
+  pull_request:
+    branches: [orkun/26.10]
   # schedule, repository_dispatch and the Run-workflow button use the default branch (orkun/ci).
   schedule:
-    - cron: "*/30 * * * *"
+    # Off the full and half hour: "High load times include the start of every hour. If the load
+    # is sufficiently high enough, some queued jobs may be dropped. To decrease the chance of
+    # delay, schedule your workflow to run at a different time of the hour."
+    # https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule
+    - cron: "17,47 * * * *"
   repository_dispatch:
     types: [zi-check]
   workflow_dispatch:
@@ -80,6 +94,7 @@ jobs:
       key: ${{ steps.decide.outputs.key }}
       r1_sha: ${{ steps.decide.outputs.r1_sha }}
       r2_sha: ${{ steps.decide.outputs.r2_sha }}
+      r2_ref: ${{ steps.decide.outputs.r2_ref }}
       ci_sha: ${{ steps.decide.outputs.ci_sha }}
       scripts_sha: ${{ steps.decide.outputs.scripts_sha }}
       extra_repo: ${{ steps.decide.outputs.extra_repo }}
@@ -89,11 +104,12 @@ jobs:
       latest: ${{ steps.decide.outputs.latest }}
       matrix: ${{ steps.decide.outputs.matrix }}
     steps:
-      # Driver branches (orkun/26.10, orkun/proto-*) use the ci scripts of orkun/ci.
+      # Driver branches (orkun/26.10, pull requests against it, orkun/proto-*) use the ci
+      # scripts of orkun/ci.
       - name: Check out the ci scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ (github.ref_name == env.R2_REF || startsWith(github.ref_name, env.PROTO_PREFIX)) && env.SUITE_REF || github.sha }}
+          ref: ${{ (github.ref_name == env.R2_REF || github.base_ref == env.R2_REF || startsWith(github.ref_name, env.PROTO_PREFIX)) && env.SUITE_REF || github.sha }}
           sparse-checkout: ci
           persist-credentials: false
 
@@ -104,6 +120,9 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           ONLY_IF_CHANGED: ${{ inputs.only_if_changed || false }}
           EXTRA_REF_IN: ${{ inputs.extra_ref }}
           EXTRA_REPO_IN: ${{ inputs.extra_repo }}
@@ -116,8 +135,6 @@ jobs:
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # A red information cell stays red here but does not fail the run; the gate job decides.
-    continue-on-error: ${{ !matrix.target }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
@@ -125,6 +142,7 @@ jobs:
       ROW: ${{ matrix.row }}
       COL: ${{ matrix.col }}
       R1_SHA: ${{ needs.changes.outputs.r1_sha }}
+      R2_REF: ${{ needs.changes.outputs.r2_ref }}
       EXTRA_REPO: ${{ needs.changes.outputs.extra_repo }}
       EXTRA_REF: ${{ needs.changes.outputs.extra_ref }}
       LABONEQ_PINNED: ${{ needs.changes.outputs.pinned }}
@@ -184,8 +202,13 @@ jobs:
           python-version: "3.13"
           cache-dependency-glob: driver/uv.lock
 
+      # An information cell with failed tests keeps this step red but the job green, so the
+      # commit status is not red for it; its check (job "checks") is neutral. A target cell's
+      # job fails. "Prevents a job from failing when a step fails."
+      # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepscontinue-on-error
       - name: Merge (R2), install, set laboneq, test
         if: ${{ !matrix.skip }}
+        continue-on-error: ${{ !matrix.target }}
         run: bash scripts/ci/run_cell.sh driver suite "cell-$ROW-$COL"
 
       - name: Upload the cell results
@@ -196,9 +219,76 @@ jobs:
           path: cell-${{ matrix.cell }}/
           if-no-files-found: warn
 
+  # One check per cell on this run's commit, with the failed tests as annotations and a job
+  # summary. Its own job, so that the write permission never meets the tested code.
+  # Permissions: https://github.com/EnricoMi/publish-unit-test-result-action#permissions
+  # (checks: write; pull-requests: write only for PR comments, off here). A Dependabot pull
+  # request gets a read-only GITHUB_TOKEN unless the workflow raises it with `permissions`:
+  # https://docs.github.com/en/code-security/reference/supply-chain-security/troubleshoot-dependabot/dependabot-on-actions
+  checks:
+    name: "${{ matrix.skip && 'Checks: skipped, nothing changed' || matrix.check }}"
+    needs: [changes, cell]
+    if: always() && needs.changes.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
+    steps:
+      - name: Download the cell results
+        if: ${{ !matrix.skip }}
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cell-${{ matrix.cell }}
+          path: cell
+
+      # fail_on "test failures": the check fails when a test fails or errors (a strict xfail
+      # that passes counts as failed). No junit.xml (merge conflict, install failure): the
+      # check is neutral, "inconclusive".
+      # https://github.com/EnricoMi/publish-unit-test-result-action#configuration
+      - name: Publish the test results
+        if: ${{ !matrix.skip }}
+        id: publish
+        uses: EnricoMi/publish-unit-test-result-action@da5b7be67623cd59bbbd1a0ce4f022050a55605f # v2.26.0
+        with:
+          files: cell/junit.xml
+          check_name: ${{ matrix.check }}
+          comment_mode: "off"
+          fail_on: test failures
+          action_fail: false
+
+      # Check run conclusions include "neutral" (grey; it does not make the commit status red):
+      # https://docs.github.com/en/rest/checks/runs#update-a-check-run
+      - name: Keep the check link; information cell, set a failed check to neutral
+        if: ${{ !matrix.skip }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+          CONCLUSION: ${{ fromJSON(steps.publish.outputs.json).conclusion }}
+          CHECK_URL: ${{ fromJSON(steps.publish.outputs.json).check_url }}
+        run: |
+          mkdir -p check && echo "$CHECK_URL" > check/url.txt
+          echo "check: $CHECK_URL ($CONCLUSION)"
+          if [ "$TARGET" != true ] && [ "$CONCLUSION" = failure ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/${CHECK_URL##*/}" \
+              -f conclusion=neutral --jq '"set to " + .conclusion'
+          fi
+
+      - name: Upload the check link
+        if: ${{ !matrix.skip }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: check-${{ matrix.cell }}
+          path: check/
+
   report:
     name: Report
-    needs: [changes, cell]
+    needs: [changes, cell, checks]
     if: always() && needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -216,12 +306,20 @@ jobs:
           pattern: cell-*
           path: cells
 
+      - name: Download the check links
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: check-*
+          path: checks
+
       - name: Build index.html and state.json
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CHECKS_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}/checks
           KEY: ${{ needs.changes.outputs.key }}
           R1_SHA: ${{ needs.changes.outputs.r1_sha }}
           R2_SHA: ${{ needs.changes.outputs.r2_sha }}
+          R2_REF: ${{ needs.changes.outputs.r2_ref }}
           CI_SHA: ${{ needs.changes.outputs.ci_sha }}
           EXTRA_REPO: ${{ needs.changes.outputs.extra_repo }}
           EXTRA_REF: ${{ needs.changes.outputs.extra_ref }}
@@ -230,8 +328,8 @@ jobs:
           LABONEQ_LATEST: ${{ needs.changes.outputs.latest }}
           MATRIX: ${{ needs.changes.outputs.matrix }}
         run: |
-          mkdir -p cells
-          python3 ci/report.py cells report --summary "$GITHUB_STEP_SUMMARY" \
+          mkdir -p cells checks
+          python3 ci/report.py cells report --summary "$GITHUB_STEP_SUMMARY" --checks checks \
             --when "$(date -u '+%Y-%m-%d %H:%M UTC')"
 
       - name: Upload the report

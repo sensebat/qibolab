@@ -7,12 +7,15 @@
 # repository dispatches and dispatches with only_if_changed stop when the key is unchanged;
 # every other run tests.
 #
-# Rows: r1 and r2; a push to orkun/26.10 tests only r2. An extra row x (no merge) runs the
+# Rows: r1 and r2; a push to orkun/26.10 tests only r2, and so does a pull request against
+# orkun/26.10 (e.g. a Dependabot laboneq bump, .github/dependabot.yml), with the pull
+# request's head as R2. An extra row x (no merge) runs the
 # branch itself on orkun/proto-* branches, or EXTRA_REF from a dispatch. Runs with an extra
 # row always test and never publish Pages.
 # Targets (must be green): r1-c1 (R1 x pinned) and r2-c2 (R2 x latest); the rest is information.
 #
 # Env: EVENT, REF_NAME, SHA, REPO   github.event_name, github.ref_name, github.sha, github.repository
+#      BASE_REF, HEAD_REF, PR_HEAD_SHA  pull requests: github.base_ref, github.head_ref, head commit
 #      ONLY_IF_CHANGED              "true" makes a dispatch behave like a scheduled run
 #      EXTRA_REPO_IN, EXTRA_REF_IN  dispatch inputs: run this ref as the extra row
 #      R1_REPO R1_REF R2_REPO R2_REF SUITE_REPO SUITE_REF STATE_URL PROTO_PREFIX
@@ -31,9 +34,13 @@ resolve() {
   git ls-remote --exit-code "https://github.com/$1" "refs/heads/$2" "refs/tags/$2" | head -1 | cut -f1
 }
 
+# r2_only: a push to orkun/26.10 or a pull request against it; R2 is that commit.
+r2_only=false r2_label=$R2_REF
 r1_sha=$(head_of "$R1_REPO" "$R1_REF")
 if [ "$EVENT" = push ] && [ "$REF_NAME" = "$R2_REF" ]; then
-  r2_sha=$SHA
+  r2_only=true r2_sha=$SHA
+elif [ "$EVENT" = pull_request ] && [ "${BASE_REF:-}" = "$R2_REF" ]; then
+  r2_only=true r2_sha=$PR_HEAD_SHA r2_label=$HEAD_REF
 else
   r2_sha=$(head_of "$R2_REPO" "$R2_REF")
 fi
@@ -57,7 +64,7 @@ fi
 
 # ci scripts: from the run's own commit on ci branches (orkun/ci, orkun/rc, ...); from orkun/ci
 # on driver branches (orkun/26.10, orkun/proto-*), whose copies may lag behind.
-if [ "$REF_NAME" = "$R2_REF" ] || [[ $REF_NAME == "$PROTO_PREFIX"* ]]; then
+if [ "$r2_only" = true ] || [[ $REF_NAME == "$PROTO_PREFIX"* ]]; then
   scripts_sha=$ci_sha
 else
   scripts_sha=$SHA
@@ -81,13 +88,13 @@ if [ -z "$extra_sha" ]; then
   fi
 fi
 
-if [ "$EVENT" = push ] && [ "$REF_NAME" = "$R2_REF" ]; then rows="r2"; else rows="r1 r2"; fi
+if [ "$r2_only" = true ]; then rows="r2"; else rows="r1 r2"; fi
 if [ -n "$extra_sha" ]; then rows="$rows x"; fi
 
 deploy=false
 if [ "$REF_NAME" = "$SUITE_REF" ] && [ "$rows" = "r1 r2" ]; then deploy=true; fi
 
-export RUN=$run ROWS=$rows R1_SHA=$r1_sha R2_SHA=$r2_sha PINNED=$pinned LATEST=$latest
+export RUN=$run ROWS=$rows R1_SHA=$r1_sha R2_SHA=$r2_sha R2_LABEL=$r2_label PINNED=$pinned LATEST=$latest
 export EXTRA_REPO=$extra_repo EXTRA_REF=$extra_ref EXTRA_SHA=$extra_sha
 matrix=$(python3 - <<'EOF'
 import json, os
@@ -95,7 +102,7 @@ e = os.environ
 targets = {"r1-c1", "r2-c2"}
 code = {
     "r1": (e["R1_REPO"], e["R1_REF"], e["R1_SHA"], ""),
-    "r2": (e["R2_REPO"], e["R2_REF"], e["R2_SHA"], f" + {e['R1_REF']}"),
+    "r2": (e["R2_REPO"], e["R2_LABEL"], e["R2_SHA"], f" + {e['R1_REF']}"),
     "x": (e["EXTRA_REPO"], e["EXTRA_REF"], e["EXTRA_SHA"], ""),
 }
 env = {"c1": f"pinned {e['PINNED']}", "c2": f"latest {e['LATEST']}"}
@@ -105,8 +112,10 @@ for r in e["ROWS"].split():
     for c in ("c1", "c2"):
         cell = f"{r}-{c}"
         role = "target" if cell in targets else "information"
+        label = f"{r.upper()} x {'pinned' if c == 'c1' else 'latest'}"
         cells.append({
             "cell": cell, "row": r, "col": c, "target": cell in targets,
+            "check": f"ZI tests {label} ({role})",
             "repo": repo, "sha": sha, "depth": 0 if r == "r2" else 1,
             "name": f"{r.upper()} x {env[c]} · {role} · {repo}@{ref} ({sha[:8]}){merged}",
         })
@@ -126,6 +135,7 @@ echo "event $EVENT, only_if_changed ${ONLY_IF_CHANGED:-false} -> run=$run, rows:
   echo "key=$key"
   echo "r1_sha=$r1_sha"
   echo "r2_sha=$r2_sha"
+  echo "r2_ref=$r2_label"
   echo "ci_sha=$ci_sha"
   echo "scripts_sha=$scripts_sha"
   echo "extra_repo=$extra_repo"
@@ -142,7 +152,7 @@ echo "event $EVENT, only_if_changed ${ONLY_IF_CHANGED:-false} -> run=$run, rows:
   echo "| | |"
   echo "|---|---|"
   echo "| R1 | \`$R1_REPO@$R1_REF\` ${r1_sha:0:8} |"
-  echo "| R2 | \`$R2_REPO@$R2_REF\` ${r2_sha:0:8} + R1 merged |"
+  echo "| R2 | \`$R2_REPO@$r2_label\` ${r2_sha:0:8} + R1 merged |"
   if [ -n "$extra_sha" ]; then
     echo "| X (extra, no merge) | \`$extra_repo@$extra_ref\` ${extra_sha:0:8} |"
   fi
