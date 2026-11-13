@@ -1,5 +1,29 @@
 # zi-driver CI changelog
 
+## ci-rc2 (draft)
+
+On sensebat/qibolab@orkun/ci-std; not on orkun/ci yet.
+
+- Test results: job `checks` publishes one check per cell, `ZI tests <cell> (<role>)`, with
+  every failed test as an annotation (EnricoMi/publish-unit-test-result-action v2.26.0,
+  pinned by commit). A target check fails on a failed test; an information check is set to
+  neutral. Only this job has `checks: write`.
+- Commit status: information cells no longer make it red. `continue-on-error` moved from
+  the cell job to its test step, so a red information cell has a red step and a green job.
+- Page and job summary: the failed-test lists are gone (they are in the checks); each grid
+  cell links to its check, the page to all checks of the commit. ci/report.py 852 -> 818
+  lines (the fault-injection explanation is new).
+- Schedule: `17,47 * * * *` instead of `*/30 * * * *`, off the start of the hour (GitHub
+  docs: delays and dropped runs at high load). zi-check and the skip-if-unchanged key stay.
+- New laboneq releases: `.github/dependabot.yml` (uv, laboneq only, pull requests against
+  orkun/26.10). Inert until it is on orkun/ci and version updates are enabled for the fork;
+  ci/README.md lists the steps. `pull_request` to orkun/26.10 runs the R2 cells of the pull
+  request's head (acts once orkun/26.10 has this workflow file). The PyPI poll stays.
+- Naming: "planted bugs" / "mutants" are now "fault injection" / "injected faults" on the
+  page, in the job summary, ci/README.md, TEETH.md and the suite's docstrings and messages.
+  `@kills` test ids are `[fault-<name>]` (were `[mutant-<name>]`); ci/report.py reads both.
+  `mutants.py`, `MUTANTS`, `@kills` and `--mutant` keep their names.
+
 ## ci-rc1 (2026-11-12)
 
 First release candidate of the zi-driver CI on sensebat/qibolab.
