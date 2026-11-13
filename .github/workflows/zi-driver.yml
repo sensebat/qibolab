@@ -225,8 +225,9 @@ jobs:
   # (checks: write; pull-requests: write only for PR comments, off here). A Dependabot pull
   # request gets a read-only GITHUB_TOKEN unless the workflow raises it with `permissions`:
   # https://docs.github.com/en/code-security/reference/supply-chain-security/troubleshoot-dependabot/dependabot-on-actions
+  # The job is named "Publish ..." so that it does not share the name of the check it creates.
   checks:
-    name: "${{ matrix.skip && 'Checks: skipped, nothing changed' || matrix.check }}"
+    name: "${{ matrix.skip && 'Checks: skipped, nothing changed' || format('Publish {0}', matrix.check) }}"
     needs: [changes, cell]
     if: always() && needs.changes.result == 'success'
     runs-on: ubuntu-latest
