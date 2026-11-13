@@ -89,9 +89,9 @@ def _group(
       ``swept``, to be used when the pulse is played. Amplitude runs on the time
       scale of the channel the pulse is played on in the sequences
       (``pulse_channels``), which for a :class:`Readout` and its probe is the
-      acquisition channel, so near time; a pulse not found there runs in near time. Duration (in s, also interpolated:
-      both resample the envelope), relative phase and the phase of a virtual Z run
-      in real time.
+      acquisition channel, so near time; a pulse not found there runs in near
+      time. Duration (in s, also interpolated: both resample the envelope),
+      relative phase and the phase of a virtual Z run in real time.
 
     A group that mixes near-time and real-time sweeps runs entirely in near time.
     Given ``sampling_rate`` (GSps), swept durations must be whole samples, as fixed
