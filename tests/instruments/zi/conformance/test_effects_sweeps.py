@@ -414,17 +414,16 @@ def test_nested_probe_sweepers_grid(platform):
 
 
 @pytest.mark.feature("F14")
-@kills(
-    "sweep_grid_reversed",
-    "nested_sweepers_swapped",
-    "results_axes_not_moved",
-    "results_q_is_i",
-)
+@kills("sweep_grid_reversed", "nested_sweepers_swapped", "results_q_is_i")
 def test_nested_drive_sweepers_grid(platform):
     """Drive frequency (outer) and drive amplitude (inner) sweepers, of equal
     length: the qibolab result at (i, j) is LabOne Q's data at the point where q0's
     drive is at frequency i and plays amplitude j, whatever loop order LabOne Q
     runs them in.
+
+    From zi_drivers faabbb45 both sweeps run in real time, so LabOne Q's axes are
+    already in the qibolab order and ``results_axes_not_moved`` changes nothing
+    here; test_result_axes_follow_sweepers (near and real time mixed) catches it.
 
     Pattern: data injected at the result seam, as in qblox-scheduler
     set_dummy_binned_acquisition_data and zhinst/laboneq-applications v26.4.0
